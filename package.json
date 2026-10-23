@@ -1,7 +1,7 @@
 {
   "name": "tripo-head",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Standalone four-view head generation, resumable jobs and local HDR IBL preview.",
   "type": "module",
   "main": "src/server.js",

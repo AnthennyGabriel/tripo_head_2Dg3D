@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 import { TripoClient } from '@vastai/tripo-sdk';
 import YAML from 'js-yaml';
 import sharp from 'sharp';
-import { zipSync } from 'fflate';
+import { TaskQueue } from './queue.js';
+import { streamArchive } from './archive.js';
+import { studioRoutes } from './studio.js';
 import { MODEL_VERSIONS, IMAGE_SIZES, TEXTURE_QUALITIES, runPipeline } from './pipeline.js';
 import { generationPlan, TRIPO_VIEW_ORDER } from './sheet.js';
 import { REMOVAL_MODES, PROMPT_PROFILES } from './prompts.js';
@@ -30,7 +32,9 @@ const regions = Object.fromEntries(['cn','overseas'].map(id => {
   return [id,{ label:r.label ?? (id==='cn'?'国内':'海外'), key:valid?key:null,
     client:valid ? new TripoClient({ apiKey:key, retries:0, ...(base?{baseUrl:base}:{}) }) : null }];
 }));
-const jobs=new Map(), active=new Map(), waiters=new Map(), writes=new Map();
+const jobs=new Map(), writes=new Map();
+const queue=new TaskQueue(Math.min(4,Math.max(1,Math.floor(Number(process.env.TRIPO_HEAD_CONCURRENCY)||2))),execute);
+const studio=studioRoutes({jobs,JOBS,send,body,persist,launch,queue,regions,options});
 let creationTail=Promise.resolve();
 async function serializedCreate(req,res,q){const previous=creationTail;let release;creationTail=new Promise(r=>release=r);await previous;try{await create(req,res,q);}finally{release();}}
 let benchmarkCases=[];
@@ -73,17 +77,19 @@ function options(q){
  return o;
 }
 async function launch(job){
- if(active.has(job.id))return;
- const promise=(async()=>{
+ if(queue.running.has(job.id)||queue.pending.some(j=>j.id===job.id))return;
+ await persist(job,{status:'queued',queued_at:new Date().toISOString(),error:null});queue.add(job);
+}
+async function execute(job,signal){
   const dir=path.join(JOBS,job.id);
   try{
-   await persist(job,{status:'running',error:null});
+   signal.throwIfAborted();
+   await persist(job,{status:'running',error:null,timings:{...job.timings,local_queue:(job.timings?.local_queue??0)+Math.max(0,(Date.now()-Date.parse(job.queued_at))/1000)}});
    await runPipeline({client:regions[job.options.region]?.client,reference:{data:await readFile(path.join(dir,job.files.reference)),filename:job.files.reference,contentType:'image/png'},
-    options:job.options,dir,state:structuredClone(job),update:p=>persist(job,p),
-    chooseViews:()=>new Promise((resolve,reject)=>{waiters.set(job.id,resolve);persist(job,{status:'awaiting_views',stage:'choose',progress:0}).catch(reject);})});
+    options:job.options,dir,state:structuredClone(job),update:p=>persist(job,p),signal,
+    chooseViews:async()=>{await persist(job,{status:'awaiting_views',stage:'choose',progress:0,awaiting_since:new Date().toISOString()});throw Object.assign(Error('views ready'),{code:'AWAIT_VIEWS'});}});
    await persist(job,{status:'done',stage:'done',progress:100});
-  }catch(e){waiters.delete(job.id);await persist(job,{status:job.submission_pending?'needs_attention':'failed',error:cleanError(e)});}
- })();active.set(job.id,promise);promise.catch(e=>console.error('任务状态保存失败：'+cleanError(e))).finally(()=>active.delete(job.id));
+  }catch(e){if(e.code==='AWAIT_VIEWS')return;await persist(job,{status:job.submission_pending?'needs_attention':signal.aborted?'paused':'failed',error:signal.aborted?'本地等待已停止，外部任务可能仍运行或计费。':cleanError(e)});}
 }
 async function create(req,res,q){
  let o;try{o=options(q);}catch(e){return send(res,400,{error:cleanError(e)});}
@@ -91,6 +97,11 @@ async function create(req,res,q){
  if(!['image/png','image/jpeg','image/webp'].includes((req.headers['content-type']??'').split(';')[0]))return send(res,415,{error:'只支持PNG/JPEG/WebP'});
  const bytes=await body(req);let png;
  const sourceHash=createHash('sha256').update(bytes).digest('hex');
+ const requestKey=req.headers['idempotency-key'];
+ if(requestKey&&(typeof requestKey!=='string'||!/^[\w-]{8,100}$/.test(requestKey)))return send(res,400,{error:'请求编号无效'});
+ const fingerprint=createHash('sha256').update(JSON.stringify({sourceHash,options:o,benchmark:[q.get('case_id'),q.get('group'),q.get('repeat'),q.get('goal')]})).digest('hex');
+ const reused=requestKey?[...jobs.values()].find(j=>j.request?.key===requestKey):null;
+ if(reused){if(reused.request.fingerprint!==fingerprint)return send(res,409,{error:'同一请求编号不可用于不同输入'});return send(res,200,{id:reused.id,reused:true});}
  let benchmark;
  if(q.has('case_id')){
   const caseId=q.get('case_id'),group=q.get('group'),repeat=Number(q.get('repeat'));
@@ -104,9 +115,9 @@ async function create(req,res,q){
  try{const image=sharp(bytes,{limitInputPixels:40_000_000});const meta=await image.metadata();if(!['png','jpeg','webp'].includes(meta.format)||meta.width<64||meta.height<64)throw new Error();png=await image.rotate().png().toBuffer();}
  catch{return send(res,400,{error:'图片无效、过小或超过4000万像素'});}
  const id=randomUUID(),dir=path.join(JOBS,id);await mkdir(dir,{recursive:true});await writeFile(path.join(dir,'reference.png'),png);
- const job={id,status:'running',stage:'upload',progress:0,options:o,initial_options:structuredClone(o),files:{reference:'reference.png'},tasks:{},
-  source_sha256:sourceHash,...(benchmark?{benchmark}:{}),created_at:new Date().toISOString()};
- jobs.set(id,job);await persist(job);launch(job);send(res,202,{id});
+ const job={id,status:'running',stage:'upload',progress:0,quality_gate:'structured-v1',options:o,initial_options:structuredClone(o),files:{reference:'reference.png'},tasks:{},
+  source_sha256:sourceHash,request:requestKey?{key:requestKey,fingerprint}:null,...(benchmark?{benchmark}:{}),created_at:new Date().toISOString()};
+ jobs.set(id,job);await persist(job);await launch(job);send(res,202,{id});
 }
 async function continueJob(req,res,job){
  if(job.status!=='awaiting_views')return send(res,409,{error:'任务当前不在等待视图确认'});
@@ -116,10 +127,19 @@ async function continueJob(req,res,job){
  if(!regions[job.options.region]?.client)return send(res,503,{error:'未配置该生成服务的API Key，视图已保存。'});
  try{checkSelectedViews(job.quality,d.views);}catch(e){return send(res,422,{error:cleanError(e)});}
  if(job.quality?.warnings?.length&&!d.quality_ack)return send(res,422,{error:'存在四视图检查提醒，请核对后确认继续。'});
+ if(job.locked||job.deleted_at)return send(res,409,{error:'任务已锁定或删除'});
+ if(job.status!=='awaiting_views')return send(res,409,{error:'视图已提交，请勿重复提交'});
+ if(job.quality_gate==='structured-v1'){
+  const unchecked=d.views.filter(v=>!job.view_checks?.views?.[v]||['pose','identity','scale','features','asymmetry','crop','background'].some(k=>job.view_checks.views[v][k]==='unchecked'));
+  if(unchecked.length)return send(res,422,{error:'请先进入「质量关卡、候选与任务管理」，完成所选视图的逐项检查；无法判断的项目请如实标记。'});
+  const unknown=d.views.filter(v=>Object.values(job.view_checks.views[v]).includes('unknown'));
+  if(unknown.length&&!d.accept_failed_views)return send(res,422,{error:'所选视图含无法判断的项目，请明确接受风险或补充参考。'});
+ }
+ const failures=d.views.filter(v=>Object.values(job.view_checks?.views?.[v]??{}).includes('fail'));
+ if(failures.length&&!d.accept_failed_views)return send(res,422,{error:'所选视图有人工标记的问题，请修正、剔除或明确接受风险。'});
  Object.assign(job.options,o,{views:d.views,swapSides:typeof d.swap_sides==='boolean'?d.swap_sides:job.options.swapSides});
- await persist(job,{status:'running',stage:'model',sheet_review:{acknowledged:true,reviewer_type:d.reviewer_type==='agent'?'agent':'human',notes:String(d.sheet_notes??'').slice(0,2000),at:new Date().toISOString()}});
- const resume=waiters.get(job.id);waiters.delete(job.id);
- if(resume)resume(d.views);else launch(job);
+ await persist(job,{status:'queued',stage:'model',timings:{...job.timings,human_confirmation:(job.timings?.human_confirmation??0)+(job.awaiting_since?Math.max(0,(Date.now()-Date.parse(job.awaiting_since))/1000):0)},sheet_review:{acknowledged:true,accept_failed_views:!!d.accept_failed_views,reviewer_type:d.reviewer_type==='agent'?'agent':'human',notes:String(d.sheet_notes??'').slice(0,2000),at:new Date().toISOString()}});
+ await queue.settled(job.id);await launch(job);
  send(res,202,{id:job.id});
 }
 await mkdir(JOBS,{recursive:true});
@@ -131,7 +151,8 @@ if(process.env.TRIPO_HEAD_SEED_EXAMPLE!=='0'){
 for(const id of await readdir(JOBS)){
  if(!idValid(id))continue;
  try{const job=JSON.parse(await readFile(path.join(JOBS,id,'job.json'),'utf8'));if(job.id!==id||!job.options||!job.files)continue;jobs.set(id,job);
-  if(job.status==='running'){
+  if(job.status==='queued'){await persist(job,{status:'paused',error:'服务已重启；排队任务等待手动恢复，未提交新请求。'});}
+  if(['running','stopping'].includes(job.status)){
    const recoverable=job.tasks?.model||job.tasks?.face_sheet;
    await persist(job,{status:recoverable&&!job.submission_pending?'interrupted':'needs_attention',error:recoverable?'服务已重启，可恢复原任务查询。':'服务重启时请求状态未确认，未自动重复提交。'});
   }
@@ -143,11 +164,17 @@ async function handle(req,res){
  if(url.pathname==='/favicon.ico'){res.writeHead(204);return res.end();}
  if(req.method==='POST'){
   const origin=req.headers.origin;if(origin&&origin!==`http://${req.headers.host}`&&origin!==`https://${req.headers.host}`)return send(res,403,{error:'拒绝跨站请求'});
+  if(parts[0]==='api'&&parts[1]==='jobs'&&parts[2]&&!req.jobLocked)return studio.exclusive(parts[2],()=>{req.jobLocked=true;return handle(req,res);});
  }
- if(req.method==='GET'&&url.pathname==='/api/health')return send(res,200,{ok:true,configured:Object.values(regions).some(r=>r.client),regions:Object.fromEntries(Object.entries(regions).map(([id,r])=>[id,{label:r.label,configured:!!r.client}]))});
- if(req.method==='GET'&&url.pathname==='/api/jobs')return send(res,200,[...jobs.values()].sort((a,b)=>b.created_at.localeCompare(a.created_at)));
+ if(req.method==='GET'&&url.pathname==='/api/health')return send(res,200,{ok:true,instance_notice:process.env.TRIPO_HEAD_INSTANCE_NOTICE??null,configured:Object.values(regions).some(r=>r.client),queue:queue.snapshot(),metrics:{arcface:'external_import_only',lpips:'external_import_only'},regions:Object.fromEntries(Object.entries(regions).map(([id,r])=>[id,{label:r.label,configured:!!r.client}]))});
+ if(req.method==='POST'&&url.pathname==='/api/services/check'){
+  const result=await Promise.all(Object.entries(regions).map(async([id,r])=>{if(!r.client)return[id,{configured:false,available:false}];try{const b=await r.client.getBalance();return[id,{configured:true,available:true,balance:Number.isFinite(b.balance)?b.balance:null}];}catch(e){return[id,{configured:true,available:false,error:cleanError(e)}];}}));
+  return send(res,200,{checked_at:new Date().toISOString(),regions:Object.fromEntries(result)});
+ }
+ if(await studio(req,res,url,parts))return;
+ if(req.method==='GET'&&url.pathname==='/api/jobs')return send(res,200,[...jobs.values()].filter(j=>!j.deleted_at).sort((a,b)=>b.created_at.localeCompare(a.created_at)));
  if(req.method==='GET'&&url.pathname==='/api/benchmark'){
-  const trials=[...jobs.values()].filter(j=>j.benchmark);
+  const trials=[...jobs.values()].filter(j=>j.benchmark&&!j.deleted_at);
   return send(res,200,{cases:benchmarkCases,jobs:trials,summary:benchmarkSummary(trials),groups:Object.fromEntries([...new Set(trials.map(j=>j.benchmark.group))].map(g=>[g,benchmarkSummary(trials.filter(j=>j.benchmark.group===g))]))});
  }
  if(req.method==='POST'&&url.pathname==='/api/benchmark/cases'){
@@ -158,6 +185,7 @@ async function handle(req,res){
  if(req.method==='POST'&&url.pathname==='/api/jobs')return serializedCreate(req,res,url.searchParams);
  if(parts[0]==='api'&&parts[1]==='jobs'&&parts[2]){
   const job=jobs.get(parts[2]);if(!job)return send(res,404,{error:'任务不存在'});
+  if(req.method==='POST'&&(job.locked||job.deleted_at))return send(res,409,{error:'任务已锁定或移入回收站；请创建候选或恢复后操作'});
   if(req.method==='GET'&&parts.length===3)return send(res,200,job);
   if(req.method==='POST'&&parts[3]==='versions'&&parts.length===4){
    if(job.status!=='done'||!job.files.model)return send(res,409,{error:'原模型尚未完成'});
@@ -180,16 +208,14 @@ async function handle(req,res){
   }
   if(req.method==='POST'&&parts[3]==='continue'&&parts.length===4)return continueJob(req,res,job);
   if(req.method==='POST'&&parts[3]==='resume'&&parts.length===4){
-   if(!['interrupted','failed'].includes(job.status)||(!job.tasks?.model&&!job.tasks?.face_sheet)||job.submission_pending)return send(res,409,{error:'没有可安全恢复的外部任务ID，未重复提交'});
+   if(!['interrupted','failed','paused'].includes(job.status)||(job.status!=='paused'&&!job.tasks?.model&&!job.tasks?.face_sheet)||job.submission_pending)return send(res,409,{error:'没有可安全恢复的外部任务ID，未重复提交'});
    if(!regions[job.options.region]?.client)return send(res,503,{error:'未配置原服务凭证'});
-   launch(job);return send(res,202,{id:job.id});
+   await persist(job,{recoveries:[...(job.recoveries??[]),{at:new Date().toISOString(),prior_status:job.status,tasks:job.tasks}]});await launch(job);return send(res,202,{id:job.id});
   }
   if(req.method==='GET'&&parts[3]==='files'&&parts.length===5&&Object.values(job.files).includes(parts[4]))return file(res,resolveFile(path.join(JOBS,job.id),parts[4]));
   if(req.method==='GET'&&parts[3]==='receipt'&&parts.length===4)return file(res,path.join(JOBS,job.id,'job.json'));
   if(req.method==='GET'&&parts[3]==='archive'&&parts.length===4){
-   const data={'job.json':new Uint8Array(Buffer.from(JSON.stringify(job,null,2)))};
-   for(const name of new Set(Object.values(job.files)))data[name]=new Uint8Array(await readFile(resolveFile(path.join(JOBS,job.id),name)));
-   const zip=zipSync(data,{level:0});res.writeHead(200,{'Content-Type':'application/zip','Content-Disposition':`attachment; filename="head-${job.id}.zip"`});return res.end(Buffer.from(zip));
+   const entries=[{name:'job.json',data:Buffer.from(JSON.stringify(job,null,2))},...[...new Set(Object.values(job.files))].map(name=>({name,path:resolveFile(path.join(JOBS,job.id),name)}))];return streamArchive(res,entries,`head-${job.id}.zip`);
   }
   return send(res,404,{error:'接口不存在'});
  }

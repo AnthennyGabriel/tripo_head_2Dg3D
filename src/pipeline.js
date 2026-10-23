@@ -22,13 +22,15 @@ export function modelOptions(options) {
 }
 
 /** Resumes durable artifacts and task IDs; never repeats an ambiguous submission. */
-export async function runPipeline({ client, reference, options, dir, update, chooseViews, state = {} }) {
+export async function runPipeline({ client, reference, options, dir, update, chooseViews, state = {}, signal }) {
   const files = { ...state.files }, tasks = { ...state.tasks }, billing = { ...state.billing };
   const started = performance.now();
   const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
   const timings={...state.timings};let phase=null,tick=started;
   const persist=update;
   update=async patch=>{
+    // Persist task IDs even when stopping, so a remote submission is never lost.
+    if(signal?.aborted&&!patch.tasks)throw Object.assign(new Error('已停止本地等待；外部任务可能仍运行或计费，可恢复查询。'),{code:'LOCAL_STOP'});
     if(patch.stage&&patch.stage!==phase){const now=performance.now();if(phase)timings[phase]=(timings[phase]??0)+(now-tick)/1000;phase=patch.stage;tick=now;}
     await persist({...patch,timings:{...timings}});
   };
@@ -36,11 +38,17 @@ export async function runPipeline({ client, reference, options, dir, update, cho
     throw new Error('上次提交结果未知，需要核对服务端任务，系统未重复提交收费请求。');
   }
   const save = async (name, data) => { await writeFile(path.join(dir, name), data); return name; };
-  const track = stage => ({ pollingIntervalMs: 2500, timeoutMs: 20 * 60_000,
-    onProgress: task => { update({ stage, progress: task.progress ?? 0,service_status:task.status??null }).catch(() => {}); } });
+  const serviceTimings={...state.service_timings};
+  async function waitTask(stage){
+    let status='unobserved',since=performance.now();const start=since;
+    const collect=()=>{const t=performance.now(),key=`${stage}:${status}`;serviceTimings[key]=(serviceTimings[key]??0)+(t-since)/1000;since=t;};
+    try{return await client.waitForTask(tasks[stage],{pollingIntervalMs:2500,timeoutMs:20*60_000,signal,onProgress:task=>{collect();status=task.status??'unknown';update({stage,progress:task.progress??0,service_status:task.status??null,service_timings:{...serviceTimings}}).catch(()=>{});}});}
+    finally{collect();if(state.tasks?.[stage])timings.recovery_query=(timings.recovery_query??0)+(performance.now()-start)/1000;await persist({service_timings:{...serviceTimings},timings:{...timings}});}
+  }
   const submit = async (stage, call) => {
     await update({ stage, submission_pending: stage });
-    const id = await submitWhenAllowed(call);
+    signal?.throwIfAborted();
+    const id = await submitWhenAllowed(call,signal);
     tasks[stage] = id;
     await update({ tasks: { ...tasks }, submission_pending: null });
     return id;
@@ -74,13 +82,15 @@ export async function runPipeline({ client, reference, options, dir, update, cho
       await submit('face_sheet', () => client.imageToImage({ inputs: [a.file_token,b.file_token],
         model: ImageModel.BANANA_PRO, prompt: provenance.prompt, aspect_ratio: '1:1', size: options.imageSize }));
     }
-    const task = await client.waitForTask(tasks.face_sheet, track('face_sheet'));
+    const task = await waitTask('face_sheet');
     await account(task);
     const url = task.output?.generated_image_url ?? task.output?.image_url ?? task.output?.image_urls?.[0];
     if (!url) throw new Error('四视图任务未返回图片。');
-    const response = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+    const downloadStart=performance.now();
+    const response = await fetch(url, { signal: signal?AbortSignal.any([signal,AbortSignal.timeout(120_000)]):AbortSignal.timeout(120_000) });
     if (!response.ok) throw new Error(`四视图下载失败 HTTP ${response.status}`);
     sheet = Buffer.from(await response.arrayBuffer());
+    timings.image_download=(timings.image_download??0)+(performance.now()-downloadStart)/1000;
     files.face_sheet = await save('face_sheet.png', sheet);
     await update({ files: { ...files } });
   }
@@ -115,7 +125,7 @@ export async function runPipeline({ client, reference, options, dir, update, cho
       ? client.imageToModel({ input: tokens[plan.view], ...modelOptions(options) })
       : client.multiviewToModel({ inputs: plan.slots.map(v => v ? tokens[v] : ''), ...modelOptions(options) }));
   }
-  const task = await client.waitForTask(tasks.model, track('model'));
+  const task = await waitTask('model');
   await account(task);
   await update({ stage: 'download', progress: 0 });
   const model = await client.downloadModel(task);
@@ -130,12 +140,13 @@ export async function runPipeline({ client, reference, options, dir, update, cho
   return files;
 }
 
-async function submitWhenAllowed(call) {
+async function submitWhenAllowed(call,signal) {
   for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
     try { return await call(); }
     catch (error) {
       if (!(error instanceof TripoAPIError) || error.code !== 2000 || attempt >= 19) throw error;
-      await new Promise(r => setTimeout(r, 30_000));
+      await new Promise((resolve,reject)=>{const onAbort=()=>{clearTimeout(timer);reject(signal.reason);};const timer=setTimeout(()=>{signal?.removeEventListener('abort',onAbort);resolve();},30_000);signal?.addEventListener('abort',onAbort,{once:true});});
     }
   }
 }

@@ -6,6 +6,7 @@ import {createIblRig} from './ibl.js';
 import {buildGraph,softWeights,displace} from './mesh-edit.js';
 const $=id=>document.getElementById(id),say=text=>$('message').textContent=text;
 const query=new URLSearchParams(location.search),jobId=query.get('job')??'example-male2',versionId=query.get('version')??'';
+$('studioLink').href=`/studio.html?job=${encodeURIComponent(jobId)}`;
 const asset=(j,name)=>`/api/jobs/${encodeURIComponent(j.id)}/files/${encodeURIComponent(name)}`;
 const renderer=new THREE.WebGLRenderer({canvas:$('model'),antialias:true,preserveDrawingBuffer:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;
 const scene=new THREE.Scene();scene.background=new THREE.Color('#20252e');const ibl=createIblRig(renderer,scene);
@@ -84,6 +85,11 @@ async function api(url,data,headers={'Content-Type':'application/json'}){const r
 $('save').onclick=()=>busy(async()=>{say('正在保存独立版本…');const bytes=await exportModel();const v=await api(`/api/jobs/${jobId}/versions`,bytes,{'Content-Type':'model/gltf-binary'});const s=settings();const record=await api(`/api/jobs/${jobId}/versions/${v.id}`,{status:'draft',notes:$('notes').value,settings:s});dirty=false;operations=[];location.href=`/workbench.html?job=${encodeURIComponent(jobId)}&version=${record.id}`;});
 $('approve').onclick=()=>busy(async()=>{if(!savedVersion||dirty||previewPending())throw Error('请先保存当前修改为独立版本');savedVersion=await api(`/api/jobs/${jobId}/versions/${savedVersion.id}`,{status:'approved',notes:$('notes').value,settings:savedVersion.settings??{}});say('已将当前保存版本标记为客户认可。');await loadVersionList();});
 $('screenshot').onclick=()=>{renderer.render(scene,camera);const out=document.createElement('canvas');out.width=1440;out.height=780;const c=out.getContext('2d');c.fillStyle='#10151d';c.fillRect(0,0,1440,780);c.fillStyle='#e6edf5';c.font='20px sans-serif';c.fillText(`参考 / ${$('mode').selectedOptions[0].textContent} · ${jobId} · ${operations.length} edits`,20,30);c.drawImage($('reference'),0,50,720,720);c.drawImage($('model'),720,50,720,720);c.drawImage($('overlay'),720,50,720,720);out.toBlob(b=>download(b,'head-comparison.png','image/png'));};
+$('saveEvidence').onclick=()=>busy(async()=>{if(loading||dirty||previewPending()||$('before').checked)throw Error('请先保存几何修改，并关闭修改前预览');
+ const visible=markers?.visible;if(markers)markers.visible=false;for(const p of parts)if(p.wire)p.wire.visible=false;renderer.render(scene,camera);
+ const capture=id=>{const c=document.createElement('canvas');c.width=c.height=640;c.getContext('2d').drawImage($(id),0,0,640,640);return c.toDataURL('image/png');};
+ let images;try{images={reference:capture('reference'),render:capture('model')};}finally{if(markers)markers.visible=visible;for(const p of parts)if(p.wire)p.wire.visible=true;}
+ await api(`/api/jobs/${jobId}/evidence`,{images,settings:settings(),version:versionId||'generated'});say('已保存参考图、渲染图、模型版本和相机参数；可进入质量与候选管理进行标注评价。');});
 function navigate(url){if((dirty||previewPending())&&!confirm('有未保存的几何修改，离开将丢失。继续？'))return;location.href=url;}
 $('job').onchange=()=>navigate(`/workbench.html?job=${encodeURIComponent($('job').value)}`);$('version').onchange=()=>navigate(`/workbench.html?job=${encodeURIComponent(jobId)}&version=${encodeURIComponent($('version').value)}`);
 window.addEventListener('beforeunload',e=>{if(dirty||previewPending()){e.preventDefault();e.returnValue='';}});

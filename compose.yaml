@@ -9,6 +9,7 @@ services:
       TRIPO_HEAD_PORT: "8771"
       TRIPO_HEAD_JOBS: /data/jobs
       TRIPO_HEAD_CONFIG: /run/config/settings.yaml
+      TRIPO_HEAD_CONCURRENCY: ${HEAD_CONCURRENCY:-2}
     volumes:
       - head-jobs:/data/jobs
       - type: bind

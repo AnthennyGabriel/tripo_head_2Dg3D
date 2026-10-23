@@ -133,6 +133,8 @@
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px"><select id="layout0"><option value="front" selected>正面</option><option value="back">背面</option><option value="left">左侧</option><option value="right">右侧</option></select><select id="layout1"><option value="front">正面</option><option value="back" selected>背面</option><option value="left">左侧</option><option value="right">右侧</option></select><select id="layout2"><option value="front">正面</option><option value="back">背面</option><option value="left" selected>左侧</option><option value="right">右侧</option></select><select id="layout3"><option value="front">正面</option><option value="back">背面</option><option value="left">左侧</option><option value="right" selected>右侧</option></select></div></div>
       <label class="field">历史任务<select id="historyJobs"><option value="">选择已保存的结果</option></select></label>
       <p><a href="/benchmark.html">五样本质量回归与人工验收 →</a></p>
+      <p><a id="studioLink" href="/studio.html">质量关卡、候选与任务管理 →</a></p>
+      <p id="instanceNotice" class="hint" hidden></p>
       <label class="field">四视图生成策略<select id="promptProfile"><option value="baseline">原始提示词（默认）</option><option value="identity-v1">人物特征约束 v1（实验，需核对侧面）</option></select></label>
       <button type="button" id="loadExample">查看本轮真实生成示例（不调用API）</button>
       <button type="button" id="openLocal">导入本地GLB</button><input id="localGlb" type="file" accept=".glb">
@@ -499,6 +501,7 @@
 
     async function poll(id) {
       clearTimeout(pollTimer);
+      $('#studioLink').href=`/studio.html?job=${encodeURIComponent(id)}`;
       const response = await fetch(`api/jobs/${id}`);
       const job = await response.json();
       if (!response.ok) {
@@ -519,9 +522,9 @@
       if(job.files.reference){$('#inputOriginalLink').hidden=false;$('#inputOriginalLink').href=fileUrl(job,job.files.reference);}
       showImage("#faceSheet", job, "face_sheet");
       showViews(job);
-      if (["failed","interrupted","needs_attention"].includes(job.status)) {
+      if (["failed","interrupted","needs_attention","paused"].includes(job.status)) {
         $("#error").textContent = job.error;
-        if(job.status!=="needs_attention"&&(job.tasks?.model||job.tasks?.face_sheet)){
+        if(job.status!=="needs_attention"&&(job.tasks?.model||job.tasks?.face_sheet||job.status==='paused')){
           const retry=document.createElement("button");retry.textContent="恢复原任务查询（不重新提交）";retry.onclick=async()=>{const r=await fetch(`api/jobs/${job.id}/resume`,{method:"POST"});const b=await r.json();if(!r.ok)return showError(Error(b.error));poll(job.id)};$("#error").append(retry);
         }
         start.disabled = !file;
@@ -577,13 +580,17 @@
       });
       if ($("#faceLimit").value) params.set("face_limit", $("#faceLimit").value);
       try {
+        const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer()))).map(b=>b.toString(16).padStart(2,'0')).join('');
+        const storageKey='head-request:'+digest+':'+params.toString();
+        const requestKey=sessionStorage.getItem(storageKey)??crypto.randomUUID();sessionStorage.setItem(storageKey,requestKey);
         const response = await fetch(`api/jobs?${params}`, {
           method: "POST",
-          headers: { "Content-Type": file.type },
+          headers: { "Content-Type": file.type, "Idempotency-Key": requestKey },
           body: file,
         });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        sessionStorage.removeItem(storageKey);
         history.replaceState(null, "", `#job=${body.id}`);
         renderStages({ stage: "upload", status: "running" });
         await poll(body.id);
@@ -853,6 +860,7 @@
     });
 
     fetch("api/health").then((response) => response.json()).then((health) => {
+      if(health.instance_notice){$('#instanceNotice').hidden=false;$('#instanceNotice').textContent=health.instance_notice;}
       const region = $("#region");
       for (const option of region.options) {
         const spec = health.regions?.[option.value];
