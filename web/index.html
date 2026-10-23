@@ -1,0 +1,858 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>原画 → 头部 3D</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111318;
+      --panel: #1a1e26;
+      --line: #303744;
+      --text: #f1f3f7;
+      --muted: #9ba5b5;
+      --accent: #69a7ff;
+      --good: #6fd08c;
+      --bad: #ff7a7a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .app { display: grid; grid-template-columns: 320px 1fr; height: 100%; min-height: 0; }
+    aside { position: relative; z-index: 2; background: var(--panel); border-right: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; }
+    .side-scroll { display: flex; flex-direction: column; gap: 12px; }
+    .side-foot { position: sticky; bottom: 0; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; background: var(--panel); }
+    main { min-width: 0; overflow: auto; padding: 16px; display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: start; }
+    h2 { margin: 0; font-size: 15px; }
+    .hint { color: var(--muted); font-size: 12.5px; margin: 0; }
+    label.field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+    input[type=number], select { width: 100%; min-height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: #242a35; color: var(--text); font: inherit; }
+    .check { display: flex; gap: 8px; align-items: center; font-size: 13px; cursor: pointer; }
+    .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+    .presets button { padding: 3px 9px; border: 1px solid var(--line); border-radius: 6px; background: #242a35; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+    .drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 8px 10px; text-align: center; cursor: pointer; color: var(--muted); }
+    .drop.over { border-color: var(--accent); color: var(--text); }
+    .drop img { display: block; max-width: 100%; max-height: 64px; margin: 0 auto 6px; border-radius: 6px; }
+    .drop img[hidden] { display: none; }
+    input[type=file] { display: none; }
+    button.primary { min-height: 40px; border: 0; border-radius: 8px; background: var(--accent); color: #08111f; font: inherit; font-weight: 700; cursor: pointer; }
+    button.primary:disabled { opacity: .45; cursor: default; }
+    #progress { position: relative; }
+    #progress[hidden] { display: none; }
+    .progress-line {
+      width: 100%; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 4px 8px;
+      border: 1px solid var(--line); border-radius: 8px; background: #242a35; color: var(--text);
+      font: inherit; font-size: 13px; cursor: pointer; text-align: left;
+    }
+    .progress-line.failed { border-color: var(--bad); color: var(--bad); }
+    .progress-line.done { border-color: var(--good); }
+    .pips { display: flex; gap: 3px; flex: none; }
+    .pips i { width: 7px; height: 7px; border-radius: 50%; background: #3a4252; display: block; }
+    .pips i.done { background: var(--good); }
+    .pips i.active { background: var(--accent); }
+    .pips i.failed { background: var(--bad); }
+    .progress-line .note { margin-left: auto; color: var(--muted); font-size: 12px; }
+    ol.stages {
+      display: none; margin: 0; padding: 6px; list-style: none; position: absolute;
+      left: calc(100% + 24px); bottom: 0; width: 220px; z-index: 5;
+      background: #1e2430; border: 1px solid var(--line); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    }
+    #progress.open ol.stages { display: grid; gap: 4px; }
+    ol.stages li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px; border-radius: 6px; color: var(--muted); font-size: 12.5px; }
+    ol.stages li.active { color: var(--text); background: #2a3344; }
+    ol.stages li.done { color: var(--good); }
+    ol.stages li.failed { color: var(--bad); }
+    #error { color: var(--bad); font-size: 13px; white-space: pre-wrap; }
+    .card { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+    .card header { min-width: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
+    .card header span { color: var(--muted); flex: none; }
+    .card .body { min-width: 0; aspect-ratio: 1; display: grid; place-items: center; background: #fff; }
+    .card .body img { width: 100%; height: 100%; min-width: 0; object-fit: contain; display: block; }
+    .card .body.empty { background: #161a21; color: var(--muted); font-size: 13px; }
+    .views { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1px; background: var(--line); }
+    .views figure { min-width: 0; margin: 0; background: #fff; position: relative; aspect-ratio: 1; overflow: hidden; }
+    .views figure img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .views figcaption { position: absolute; left: 6px; top: 4px; font-size: 11px; color: #333; background: rgba(255,255,255,.8); padding: 0 5px; border-radius: 4px; }
+    .views figure.pick { cursor: pointer; }
+    .views figure.on { box-shadow: inset 0 0 0 3px var(--accent); }
+    .views figure.off img { filter: grayscale(1); opacity: .4; }
+    .card[hidden] { display: none; }
+    .choose-bar { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+    .choose-bar p { margin: 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+    .choose-bar #chooseHint { color: var(--text); font-size: 13px; }
+    .card .body a { display: contents; }
+    .card.viewer-card { grid-column: 1 / -1; }
+    .stage { position: relative; height: max(560px, calc(100vh - 110px)); }
+    .stage:fullscreen { height: 100vh; }
+    #viewer { width: 100%; height: 100%; display: block; }
+    .tools {
+      position: absolute; top: 10px; right: 10px; width: 230px;
+      max-height: min(calc(100% - 20px), calc(100vh - 24px)); overflow: auto;
+      display: grid; gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 10px;
+      background: rgba(20, 23, 30, .88); backdrop-filter: blur(6px); font-size: 12.5px;
+    }
+    .tools.hidden > :not(.tools-head) { display: none; }
+    .tools-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+    .tools label { display: grid; gap: 3px; color: var(--muted); }
+    .tools label.check { display: flex; color: var(--text); }
+    .tools input[type=range] { width: 100%; accent-color: var(--accent); }
+    .tools select { min-height: 28px; font-size: 12.5px; }
+    .tools .row { display: flex; gap: 5px; flex-wrap: wrap; }
+    .tools button { padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: #242a35; color: var(--text); font: inherit; cursor: pointer; }
+    .tools hr { border: 0; border-top: 1px solid var(--line); margin: 2px 0; width: 100%; }
+    .stats { position: absolute; left: 10px; bottom: 10px; padding: 6px 10px; border-radius: 8px; background: rgba(20, 23, 30, .8); color: var(--muted); font-size: 12px; white-space: pre-line; pointer-events: none; }
+    .stats:empty { display: none; }
+    a.download { color: var(--accent); text-decoration: none; }
+    @media (max-width: 1100px) {
+      main { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 900px) {
+      html,body { height:auto;overflow:auto; }
+      .app { grid-template-columns: 1fr; height: auto; }
+      main { overflow:visible; }
+      .card header { flex-wrap:wrap; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="side-scroll">
+      <h2>原画 → 头部 3D</h2>
+      <label class="field">端点
+        <select id="region">
+          <option value="cn">国内</option>
+          <option value="overseas">海外</option>
+        </select>
+      </label>
+
+      <label class="field">输入方式<select id="inputMode"><option value="sheet">已有四宫格，直接生成3D</option><option value="concept">原画，先生成四视图</option></select></label>
+      <p class="hint">已有四宫格不重画人物；规则2×2布局，先检查四个图块的视角标签，再提交生成。</p>
+      <div id="layoutFields"><label class="field">四宫格图块（左上、右上、左下、右下）</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px"><select id="layout0"><option value="front" selected>正面</option><option value="back">背面</option><option value="left">左侧</option><option value="right">右侧</option></select><select id="layout1"><option value="front">正面</option><option value="back" selected>背面</option><option value="left">左侧</option><option value="right">右侧</option></select><select id="layout2"><option value="front">正面</option><option value="back">背面</option><option value="left" selected>左侧</option><option value="right">右侧</option></select><select id="layout3"><option value="front">正面</option><option value="back">背面</option><option value="left">左侧</option><option value="right" selected>右侧</option></select></div></div>
+      <label class="field">历史任务<select id="historyJobs"><option value="">选择已保存的结果</option></select></label>
+      <button type="button" id="loadExample">查看本轮真实生成示例（不调用API）</button>
+      <button type="button" id="openLocal">导入本地GLB</button><input id="localGlb" type="file" accept=".glb">
+      <label class="field">模型面数
+        <input type="number" id="faceLimit" min="1000" max="2000000" step="1000" value="100000">
+      </label>
+      <div class="presets" id="presets">
+        <button type="button" data-value="5000">5k</button>
+        <button type="button" data-value="10000">1万</button>
+        <button type="button" data-value="20000">2万</button>
+        <button type="button" data-value="50000">5万</button>
+        <button type="button" data-value="1000000">100万</button>
+        <button type="button" data-value="">不限制</button>
+      </div>
+      <label class="field">模型版本
+        <select id="modelVersion">
+          <option value="h3.1">H3.1</option>
+          <option value="h3.0">H3.0</option>
+        </select>
+      </label>
+      <label class="field">去除头发 / 胡子
+        <select id="removal"><option value="keep">保留原画头发和胡须</option>
+          <option value="auto">头发和胡子一起去掉</option>
+          <option value="hair">只去头发，保留胡子</option>
+          <option value="beard">只去胡子，保留头发</option>
+        </select>
+      </label>
+      <label class="field">生成图分辨率
+        <select id="imageSize">
+          <option value="4K">4K（4096²）</option>
+          <option value="2K">2K（2048²）</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="texture" checked> 生成贴图</label>
+      <label class="field">贴图质量
+        <select id="textureQuality">
+          <option value="detailed">精细</option>
+          <option value="standard">标准</option>
+        </select>
+      </label>
+      <p class="hint">生成贴图时开启去光：去掉参考图里的光照，贴图是均匀底色。</p>
+      <label class="check"><input type="checkbox" id="swapSides"> 左右侧视图对调（模型侧面反了时勾选）</label>
+      </div>
+      <div class="side-foot">
+      <div class="drop" id="drop">
+        <img id="refPreview" hidden alt="参考原画">
+        <div id="dropText">点击或拖入规则四宫格图片</div>
+      </div>
+      <input type="file" id="file" accept="image/png,image/jpeg,image/webp">
+      <a id="inputOriginalLink" target="_blank" hidden>查看输入原图</a>
+      <button type="button" class="primary" id="start" disabled>导入并检查视图</button>
+      <div id="progress" hidden>
+        <button type="button" class="progress-line" id="progressToggle" aria-expanded="false">
+          <span class="pips" id="pips"></span>
+          <span id="progressLabel"></span>
+          <span class="note" id="progressNote"></span>
+        </button>
+        <ol class="stages" id="stages"></ol>
+      </div>
+      <div id="error"></div>
+      </div>
+    </aside>
+
+    <main>
+      <section class="card">
+        <header>人脸四视图 <span id="sheetOrigin">原画生成或直接导入</span></header>
+        <div class="body empty" id="faceSheet">等待生成</div>
+      </section>
+      <section class="card">
+        <header>裁剪后的四个视角 <span id="viewsNote">送给 Tripo</span></header>
+        <div class="body empty" id="views">等待生成</div>
+      </section>
+      <section class="card" id="choosePanel" hidden>
+        <header>选择视角 <span>勾选后继续</span></header>
+        <div class="choose-bar">
+          <button type="button" class="primary" id="useViews">用选中的图生成模型</button>
+          <p id="chooseHint"></p>
+          <p>点左边的图切换选中。一张走单图；两张及以上走多视图，必须含正面。左右反了先勾选「左右侧视图对调」。</p>
+          <p>模型面数、模型版本和贴图设置以点这个按钮时侧边栏的值为准。</p>
+        </div>
+      </section>
+      <section class="card viewer-card">
+        <header>头部模型 <span id="modelInfo">Tripo H3</span></header>
+        <div class="stage" id="stage">
+          <canvas id="viewer"></canvas>
+          <div class="tools" id="tools">
+            <div class="tools-head">查看设置 <button type="button" id="toggleTools">收起</button></div>
+            <div class="row">
+              <button type="button" data-view="front">正面</button>
+              <button type="button" data-view="quarter">3/4</button>
+              <button type="button" data-view="left">左侧</button>
+              <button type="button" data-view="right">右侧</button>
+              <button type="button" data-view="back">背面</button>
+            </div>
+            <div class="row">
+              <button type="button" id="resetLook">恢复默认</button>
+              <button type="button" id="fullscreen">全屏</button>
+            </div>
+            <label>镜头
+              <select id="projection">
+                <option value="perspective">透视（近大远小）</option>
+                <option value="orthographic">正交（无透视变形）</option>
+              </select>
+            </label>
+            <label>显示方式
+              <select id="shading">
+                <option value="textured">贴图（PBR）</option>
+                <option value="unlit">仅贴图（无光照）</option>
+                <option value="clay">白膜</option>
+                <option value="normal">法线</option>
+              </select>
+            </label>
+            <label class="check"><input type="checkbox" id="wire"> 显示网格线</label>
+            <label class="check"><input type="checkbox" id="noMetal"> 关闭金属度</label>
+            <label class="check"><input type="checkbox" id="envLight" checked> IBL环境照明</label>
+            <label>环境<select id="environment"><option value="studio">中性摄影棚HDRI</option><option value="room">合成柔光房间</option></select></label>
+            <label>IBL强度<input type="range" id="iblIntensity" min="0" max="3" step="0.05" value="1"></label><small id="iblStatus">加载本地HDRI…</small>
+            <button id="screenshot" type="button">保存预览截图</button>
+            <hr>
+            <label>曝光 <input type="range" id="exposure" min="0.2" max="2.5" step="0.05" value="1"></label>
+            <label>主光强度 <input type="range" id="keyIntensity" min="0" max="6" step="0.1" value="2"></label>
+            <label>主光水平方向 <input type="range" id="keyAzimuth" min="-180" max="180" step="1" value="35"></label>
+            <label>主光高度 <input type="range" id="keyElevation" min="-60" max="90" step="1" value="35"></label>
+            <label>环境光强度 <input type="range" id="ambient" min="0" max="3" step="0.05" value="0.6"></label>
+            <label>背景
+              <select id="background">
+                <option value="#20252e">深灰</option>
+                <option value="#8a9099">中灰</option>
+                <option value="#ffffff">白</option>
+                <option value="#000000">黑</option>
+              </select>
+            </label>
+            <hr>
+            <label class="check"><input type="checkbox" id="autoRotate"> 自动旋转</label>
+          </div>
+          <div class="stats" id="stats"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/vendor/build/three.module.js",
+        "three/addons/": "/vendor/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+    import { createIblRig } from "./ibl.js";
+
+    const STAGES = [
+      ["upload", "上传原画"],
+      ["face_sheet", "生成人脸四视图"],
+      ["split", "裁剪四个视角"],
+      ["choose", "选择视角"],
+      ["model", "Tripo H3 生成模型"],
+      ["download", "下载模型"],
+    ];
+    const VIEW_NAMES = { front: "前", left: "左", back: "后", right: "右" };
+    const $ = (selector) => document.querySelector(selector);
+    const fileInput = $("#file");
+    const drop = $("#drop");
+    const start = $("#start");
+    let file = null;
+    let pollTimer = null;
+    let shownModel = null;
+    let settingsJob = null;
+
+    for (const button of document.querySelectorAll("#presets button")) {
+      button.addEventListener("click", () => { $("#faceLimit").value = button.dataset.value; });
+    }
+
+    function pick(chosen) {
+      if (!chosen || !chosen.type.startsWith("image/")) return;
+      file = chosen;
+      $("#refPreview").src = URL.createObjectURL(chosen);
+      $("#refPreview").hidden = false;
+      $("#dropText").textContent = chosen.name;
+      start.disabled = false;
+    }
+    drop.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => pick(fileInput.files[0]));
+    drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (event) => {
+      event.preventDefault();
+      drop.classList.remove("over");
+      pick(event.dataTransfer.files[0]);
+    });
+
+    let stagesOpen = false;
+    $("#progressToggle").addEventListener("click", () => {
+      stagesOpen = !stagesOpen;
+      $("#progress").classList.toggle("open", stagesOpen);
+      $("#progressToggle").setAttribute("aria-expanded", String(stagesOpen));
+    });
+
+    function renderStages(job) {
+      const root = $("#progress");
+      if (!job) {
+        root.hidden = true;
+        stagesOpen = false;
+        root.classList.remove("open");
+        return;
+      }
+      root.hidden = false;
+      const current = STAGES.findIndex(([key]) => key === job.stage);
+      const items = STAGES.map(([key, label], index) => {
+        let state = "";
+        let note = "";
+        if (job.status === "done" || index < current) state = "done";
+        else if (index === current) state = job.status === "failed" ? "failed" : "active";
+        if (state === "active" && job.status === "awaiting_views") note = "请选择";
+        else if (state === "active" && job.progress) note = `${Math.round(job.progress)}%`;
+        if (state === "done") note = "✓";
+        return { label, state, note };
+      });
+      $("#pips").innerHTML = items.map((item) => `<i class="${item.state}"></i>`).join("");
+      $("#stages").innerHTML = items.map((item) => (
+        `<li class="${item.state}"><span>${item.label}</span><span>${item.note}</span></li>`
+      )).join("");
+      const focus = items.find((item) => item.state === "active" || item.state === "failed");
+      const line = $("#progressToggle");
+      line.classList.toggle("failed", Boolean(focus && focus.state === "failed"));
+      line.classList.toggle("done", job.status === "done");
+      $("#progressLabel").textContent = focus ? focus.label : "已完成";
+      const step = focus ? items.indexOf(focus) + 1 : items.length;
+      $("#progressNote").textContent = focus?.note || `${step}/${items.length}`;
+    }
+    renderStages(null);
+
+    const fileUrl = (job, name) => `api/jobs/${job.id}/files/${encodeURIComponent(name)}`;
+
+    function showImage(target, job, key) {
+      const element = $(target);
+      const name = job.files[key];
+      if (!name || element.dataset.name === job.id+":"+name) return;
+      element.dataset.name = job.id+":"+name;
+      element.classList.remove("empty");
+      element.innerHTML = `<a href="${fileUrl(job, name)}" target="_blank" title="新窗口查看原图"><img alt="" src="${fileUrl(job, name)}"></a>`;
+    }
+
+    const VIEW_ORDER = ["front", "left", "back", "right"];
+    let resuming = false;
+
+    function showViews(job) {
+      const element = $("#views");
+      const choosing = job.status === "awaiting_views";
+      const used = Array.isArray(job.options?.views) ? job.options.views.join(",") : "";
+      const signature = `${job.id}:${choosing}:${used}`;
+      if (!job.files.view_front || element.dataset.signature === signature) return;
+      element.dataset.signature = signature;
+      element.classList.remove("empty");
+      $("#choosePanel").hidden = !choosing;
+      $("#viewsNote").textContent = choosing ? "点图切换选中" : "送给 Tripo";
+      const figures = VIEW_ORDER.map((view) => {
+        const name = job.files[`view_${view}`];
+        const image = `<img alt="${VIEW_NAMES[view]}" src="${fileUrl(job, name)}">`;
+        const on = !used || used.split(",").includes(view);
+        if (choosing) {
+          return `<figure class="pick on" data-view="${view}">${image}<figcaption>${VIEW_NAMES[view]}</figcaption></figure>`;
+        }
+        const linked = `<a href="${fileUrl(job, name)}" target="_blank">${image}</a>`;
+        return `<figure class="${on ? "on" : "off"}">${linked}<figcaption>${VIEW_NAMES[view]}</figcaption></figure>`;
+      }).join("");
+      element.innerHTML = `<div class="views">${figures}</div>`;
+      if (choosing) bindChooser(job);
+    }
+
+    function bindChooser(job) {
+      const selected = new Set(VIEW_ORDER);
+      // Replaced on every bind so a previous job's click handler cannot fire.
+      const old = $("#useViews");
+      const button = old.cloneNode(true);
+      old.replaceWith(button);
+      const hint = $("#chooseHint");
+      function refresh() {
+        for (const figure of document.querySelectorAll("#views figure")) {
+          const on = selected.has(figure.dataset.view);
+          figure.classList.toggle("on", on);
+          figure.classList.toggle("off", !on);
+        }
+        const names = VIEW_ORDER.filter((view) => selected.has(view)).map((view) => VIEW_NAMES[view]);
+        if (selected.size === 0) {
+          button.disabled = true;
+          hint.textContent = "至少选一张。";
+        } else if (selected.size === 1) {
+          button.disabled = false;
+          hint.textContent = `将用「${names[0]}」这一张做单图生成。`;
+        } else if (!selected.has("front")) {
+          button.disabled = true;
+          hint.textContent = "多视图必须包含正面。可以只留一张，改走单图生成。";
+        } else {
+          button.disabled = false;
+          hint.textContent = `将用这 ${selected.size} 张（${names.join("、")}）做多视图生成。`;
+        }
+      }
+      for (const figure of document.querySelectorAll("#views figure")) {
+        figure.addEventListener("click", () => {
+          const view = figure.dataset.view;
+          if (selected.has(view)) selected.delete(view);
+          else selected.add(view);
+          refresh();
+        });
+      }
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        resuming = true;
+        try {
+          const response = await fetch(`api/jobs/${job.id}/continue`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              views: VIEW_ORDER.filter((view) => selected.has(view)),
+              swap_sides: $("#swapSides").checked,
+              model: $("#modelVersion").value,
+              texture: $("#texture").checked,
+              texture_quality: $("#textureQuality").value,
+              face_limit: $("#faceLimit").value ? Number($("#faceLimit").value) : null,
+            }),
+          });
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+          $("#error").textContent = "";
+          await poll(job.id);
+        } catch (error) {
+          resuming = false;
+          showError(error);
+          refresh();
+        }
+      });
+      refresh();
+    }
+
+    function resetResults() {
+      for (const id of ["#faceSheet", "#views"]) {
+        const element = $(id);
+        element.className = "body empty";
+        element.textContent = "等待生成";
+        delete element.dataset.name;
+        delete element.dataset.signature;
+      }
+      $("#choosePanel").hidden = true;
+      $("#viewsNote").textContent = "送给 Tripo";
+      resuming = false;
+      $("#modelInfo").textContent = "Tripo H3";
+      $("#error").textContent = "";
+      clearModel();
+      renderStages(null);
+    }
+
+    async function poll(id) {
+      clearTimeout(pollTimer);
+      const response = await fetch(`api/jobs/${id}`);
+      const job = await response.json();
+      if (!response.ok) {
+        $("#error").textContent = job.error || "任务不存在";
+        start.disabled = !file;
+        return;
+      }
+      renderStages(job);
+      if(settingsJob!==job.id){
+        settingsJob=job.id;
+        for(const [id,value] of Object.entries({inputMode:job.options.inputMode??'concept',region:job.options.region,modelVersion:job.options.modelVersion,textureQuality:job.options.textureQuality,faceLimit:job.options.faceLimit??'',removal:job.options.removal,imageSize:job.options.imageSize})){if(value!=null)$('#'+id).value=value;}
+        $('#texture').checked=job.options.texture;$('#swapSides').checked=!!job.options.swapSides;
+        (job.options.layout??['front','back','left','right']).forEach((v,i)=>$('#layout'+i).value=v);
+        $('#inputMode').onchange();
+      }
+      $('#sheetOrigin').textContent=job.options.inputMode==='sheet'?'直接使用输入四宫格':'从原画生成 · 请检查特征是否变化';
+      if(job.files.reference){$('#inputOriginalLink').hidden=false;$('#inputOriginalLink').href=fileUrl(job,job.files.reference);}
+      showImage("#faceSheet", job, "face_sheet");
+      showViews(job);
+      if (["failed","interrupted","needs_attention"].includes(job.status)) {
+        $("#error").textContent = job.error;
+        if(job.status!=="needs_attention"&&(job.tasks?.model||job.tasks?.face_sheet)){
+          const retry=document.createElement("button");retry.textContent="恢复原任务查询（不重新提交）";retry.onclick=async()=>{const r=await fetch(`api/jobs/${job.id}/resume`,{method:"POST"});const b=await r.json();if(!r.ok)return showError(Error(b.error));poll(job.id)};$("#error").append(retry);
+        }
+        start.disabled = !file;
+        return;
+      }
+      if (job.status === "awaiting_views") {
+        if (resuming) {
+          pollTimer = setTimeout(() => poll(id).catch(showError), 400);
+          return;
+        }
+        start.disabled = !file;
+        return;
+      }
+      resuming = false;
+      if (job.status === "done") {
+        start.disabled = !file;
+        refreshHistory();
+        const credits = job.credits ? ` · 消耗 ${job.credits} 积分` : "";
+        const faces = job.options.faceLimit ? `面数上限 ${job.options.faceLimit}` : "面数不限";
+        $("#modelInfo").innerHTML = `${faces}${credits} · <a class="download" href="${fileUrl(job, job.files.model)}" download>下载模型</a>`;
+        const links=document.createElement("div");
+        for(const [label,url] of [["下载原图与模型完整产物包",`api/jobs/${job.id}/archive`],["任务参数记录",`api/jobs/${job.id}/receipt`]]){const a=document.createElement("a");a.href=url;a.textContent=label;a.style.marginRight="16px";a.setAttribute("download","");links.append(a)}$("#modelInfo").append(links);
+        if (shownModel !== job.id && job.files.model.endsWith(".glb")) {
+          shownModel = job.id;
+          loadModel(fileUrl(job, job.files.model));
+        }
+        return;
+      }
+      pollTimer = setTimeout(() => poll(id).catch(showError), 2000);
+    }
+
+    function showError(error) {
+      $("#error").textContent = error.message || String(error);
+      start.disabled = !file;
+    }
+
+    start.addEventListener("click", async () => {
+      if (!file) return;
+      start.disabled = true;
+      resetResults();
+      const params = new URLSearchParams({
+        input_mode: $("#inputMode").value,
+        layout: [0,1,2,3].map(i=>$("#layout"+i).value).join(","),
+        model: $("#modelVersion").value,
+        removal: $("#removal").value,
+        image_size: $("#imageSize").value,
+        texture: $("#texture").checked ? "1" : "0",
+        texture_quality: $("#textureQuality").value,
+        swap_sides: $("#swapSides").checked ? "1" : "0",
+        region: $("#region").value,
+      });
+      if ($("#faceLimit").value) params.set("face_limit", $("#faceLimit").value);
+      try {
+        const response = await fetch(`api/jobs?${params}`, {
+          method: "POST",
+          headers: { "Content-Type": file.type },
+          body: file,
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+        history.replaceState(null, "", `#job=${body.id}`);
+        renderStages({ stage: "upload", status: "running" });
+        await poll(body.id);
+      } catch (error) {
+        showError(error);
+      }
+    });
+
+    // Viewer.
+    const stage = $("#stage");
+    const canvas = $("#viewer");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    const scene = new THREE.Scene();
+    const ibl = createIblRig(renderer, scene);
+    ibl.ready.then(()=>{$("#iblStatus").textContent=ibl.source==="hdr"?"本地HDRI已加载 · Poly Haven CC0":"HDRI不可用，已回退合成环境";window.iblReady=true;});
+    const ambient = new THREE.HemisphereLight(0xffffff, 0x444455, 0.6);
+    const key = new THREE.DirectionalLight(0xffffff, 2);
+    scene.add(ambient, key);
+    const PERSPECTIVE_FOV = 30;
+    const HALF_FOV_TAN = Math.tan(THREE.MathUtils.degToRad(PERSPECTIVE_FOV / 2));
+    const perspectiveCamera = new THREE.PerspectiveCamera(PERSPECTIVE_FOV, 1.6, 0.01, 100);
+    perspectiveCamera.position.set(3, 0, 0);
+    // Orthographic: half of the visible height is `orthoHalf` at zoom 1; wheel zoom changes `zoom`.
+    const orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
+    let orthoHalf = 3 * HALF_FOV_TAN;
+    let camera = perspectiveCamera;
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+
+    // Tripo H3 multiview models face +x; the character's right side is +z.
+    const VIEW_DIRECTIONS = {
+      front: [1, 0, 0], quarter: [1, 0, 1], back: [-1, 0, 0], right: [0, 0, 1], left: [0, 0, -1],
+    };
+    const LOOK_DEFAULTS = {
+      environment:"studio", iblIntensity:1, projection: "perspective", shading: "textured", wire: false, noMetal: false, envLight: true, exposure: 1,
+      keyIntensity: 0.6, keyAzimuth: 35, keyElevation: 35, ambient: 0.15,
+      background: "#20252e", autoRotate: false,
+    };
+    const clay = new THREE.MeshStandardMaterial({ color: 0xdedede, roughness: 0.75, metalness: 0 });
+    const normals = new THREE.MeshNormalMaterial();
+    const wireMaterial = new THREE.LineBasicMaterial({ color: 0x0b0d12, transparent: true, opacity: 0.4 });
+    let model = null;
+    let modelSize = 1;
+    // Per mesh: its own materials, derived variants, and a lazily built wireframe.
+    let parts = [];
+
+    const eachMaterial = (material, change) => Array.isArray(material) ? material.map(change) : change(material);
+
+    function materialFor(part, shading) {
+      if (shading === "clay") return clay;
+      if (shading === "normal") return normals;
+      if (shading === "unlit") return part.unlit;
+      return $("#noMetal").checked ? part.noMetal : part.original;
+    }
+
+    function fitOrthographic() {
+      const aspect = canvas.clientWidth / Math.max(canvas.clientHeight, 1);
+      orthographicCamera.left = -orthoHalf * aspect;
+      orthographicCamera.right = orthoHalf * aspect;
+      orthographicCamera.top = orthoHalf;
+      orthographicCamera.bottom = -orthoHalf;
+      orthographicCamera.updateProjectionMatrix();
+    }
+
+    // Switches the camera while keeping direction, target and apparent size of the model.
+    function setProjection(kind) {
+      const orthographic = kind === "orthographic";
+      if (orthographic === (camera === orthographicCamera)) return;
+      const direction = camera.position.clone().sub(controls.target);
+      const distance = direction.length();
+      direction.normalize();
+      let next;
+      if (orthographic) {
+        orthoHalf = distance * HALF_FOV_TAN / camera.zoom;
+        next = orthographicCamera;
+        next.zoom = 1;
+        next.position.copy(camera.position);
+      } else {
+        const visibleHalf = orthoHalf / orthographicCamera.zoom;
+        next = perspectiveCamera;
+        next.position.copy(controls.target).addScaledVector(direction, visibleHalf / HALF_FOV_TAN);
+        next.zoom = 1;
+      }
+      next.quaternion.copy(camera.quaternion);
+      next.near = camera.near;
+      next.far = camera.far;
+      camera = next;
+      controls.object = camera;
+      if (orthographic) fitOrthographic();
+      else camera.updateProjectionMatrix();
+      controls.update();
+    }
+
+    function applyLook() {
+      setProjection($("#projection").value);
+      renderer.toneMappingExposure = Number($("#exposure").value);
+      key.intensity = Number($("#keyIntensity").value);
+      const azimuth = THREE.MathUtils.degToRad(Number($("#keyAzimuth").value));
+      const elevation = THREE.MathUtils.degToRad(Number($("#keyElevation").value));
+      key.position.set(
+        Math.cos(elevation) * Math.cos(azimuth), Math.sin(elevation), Math.cos(elevation) * Math.sin(azimuth),
+      ).multiplyScalar(modelSize * 3);
+      ambient.intensity = Number($("#ambient").value);
+      scene.background = new THREE.Color($("#background").value);
+      controls.autoRotate = $("#autoRotate").checked;
+      const shading = $("#shading").value;
+      const wire = $("#wire").checked;
+      for (const part of parts) {
+        part.mesh.material = materialFor(part, shading);
+        if (wire && !part.wire) {
+          part.wire = new THREE.LineSegments(new THREE.WireframeGeometry(part.mesh.geometry), wireMaterial);
+          part.mesh.add(part.wire);
+        }
+        if (part.wire) part.wire.visible = wire;
+      }
+      ibl.set({enabled:$("#envLight").checked,intensity:Number($("#iblIntensity").value),preset:$("#environment").value});
+    }
+
+    function resetLook() {
+      for (const [id, value] of Object.entries(LOOK_DEFAULTS)) {
+        const input = $(`#${id}`);
+        if (input.type === "checkbox") input.checked = value;
+        else input.value = value;
+      }
+      applyLook();
+    }
+
+    function setView(name) {
+      const distance = modelSize * 1.6;
+      camera.position.fromArray(VIEW_DIRECTIONS[name]).normalize().multiplyScalar(distance);
+      camera.zoom = 1;
+      orthoHalf = distance * HALF_FOV_TAN;
+      controls.target.set(0, 0, 0);
+      if (camera === orthographicCamera) fitOrthographic();
+      else camera.updateProjectionMatrix();
+      controls.update();
+    }
+
+    function showStats() {
+      let triangles = 0;
+      let vertices = 0;
+      const textures = new Set();
+      let surface = "";
+      for (const { mesh, original } of parts) {
+        const geometry = mesh.geometry;
+        vertices += geometry.attributes.position.count;
+        triangles += (geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3;
+        eachMaterial(original, (material) => {
+          for (const slot of ["map", "normalMap", "metalnessMap", "roughnessMap"]) {
+            const image = material[slot]?.image;
+            if (image) textures.add(`${image.width}×${image.height}`);
+          }
+          if (!surface && "metalness" in material) {
+            const mapped = material.metalnessMap ? "（有金属度贴图）" : "";
+            surface = `金属度 ${material.metalness.toFixed(2)}${mapped} · 粗糙度 ${material.roughness.toFixed(2)}`;
+          }
+          return material;
+        });
+      }
+      $("#stats").textContent = [
+        `三角面 ${Math.round(triangles).toLocaleString()} · 顶点 ${vertices.toLocaleString()}`,
+        textures.size ? `贴图 ${[...textures].join("、")}` : "无贴图",
+        surface,
+      ].filter(Boolean).join("\n");
+    }
+
+    function clearModel() {
+      if (model) {
+        scene.remove(model);const disposed=new Set();
+        model.traverse(o=>{if(o.isMesh){o.geometry?.dispose();}});
+        for(const part of parts)for(const material of [part.original,part.noMetal,part.unlit].flat())if(material&&!disposed.has(material)){disposed.add(material);for(const v of Object.values(material))if(v?.isTexture&&!disposed.has(v)){disposed.add(v);v.dispose()}material.dispose()}
+      }
+      model = null;
+      parts = [];
+      shownModel = null;
+      $("#stats").textContent = "";
+    }
+
+    function loadModel(url) {
+      window.viewerReady=false;
+      new GLTFLoader().load(url, (gltf) => {
+        clearModel();
+        model = gltf.scene;
+        const box = new THREE.Box3().setFromObject(model);
+        modelSize = box.getSize(new THREE.Vector3()).length();
+        model.position.sub(box.getCenter(new THREE.Vector3()));
+        model.traverse((object) => {
+          if (!object.isMesh) return;
+          const original = object.material;
+          parts.push({
+            mesh: object,
+            original,
+            unlit: eachMaterial(original, (material) => new THREE.MeshBasicMaterial({
+              map: material.map ?? null,
+              color: material.map ? 0xffffff : material.color,
+            })),
+            noMetal: eachMaterial(original, (material) => {
+              const copy = material.clone();
+              if ("metalness" in copy) {
+                copy.metalness = 0;
+                copy.metalnessMap = null;
+              }
+              return copy;
+            }),
+            wire: null,
+          });
+        });
+        scene.add(model);
+        for (const each of [perspectiveCamera, orthographicCamera]) {
+          each.near = modelSize / 100;
+          each.far = modelSize * 20;
+        }
+        setView("front");
+        applyLook();
+        showStats();window.viewerReady=true;window.previewVertexCount=parts.reduce((sum,p)=>sum+p.mesh.geometry.attributes.position.count,0);
+        document.querySelector('.viewer-card').scrollIntoView({block:'start',behavior:'smooth'});
+      }, undefined, (error) => showError(new Error(`模型加载失败：${error.message || error}`)));
+    }
+
+    for (const input of document.querySelectorAll("#tools input, #tools select")) {
+      input.addEventListener("input", applyLook);
+    }
+    for (const button of document.querySelectorAll("#tools [data-view]")) {
+      button.addEventListener("click", () => setView(button.dataset.view));
+    }
+    $("#resetLook").addEventListener("click", resetLook);
+    $("#fullscreen").addEventListener("click", () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else stage.requestFullscreen();
+    });
+    $("#toggleTools").addEventListener("click", () => {
+      const hidden = $("#tools").classList.toggle("hidden");
+      $("#toggleTools").textContent = hidden ? "展开" : "收起";
+    });
+    resetLook();
+    $("#screenshot").onclick=()=>{renderer.render(scene,camera);const a=document.createElement("a");a.download="head-preview.png";a.href=canvas.toDataURL("image/png");a.click()};
+    $("#openLocal").onclick=()=>$("#localGlb").click();
+    let localUrl;
+    $("#localGlb").onchange=()=>{const f=$("#localGlb").files[0];if(!f)return;clearTimeout(pollTimer);if(localUrl)URL.revokeObjectURL(localUrl);localUrl=URL.createObjectURL(f);resetResults();loadModel(localUrl);$("#modelInfo").textContent="本地模型："+f.name;const a=document.createElement("a");a.href=localUrl;a.download=f.name;a.textContent=" 下载原模型";$("#modelInfo").append(a)};
+    $("#loadExample").onclick=()=>{resetResults();history.replaceState(null,"",location.pathname+"#job=example-male2");poll("example-male2").catch(showError)};
+    async function refreshHistory(){const r=await fetch("api/jobs");const list=await r.json(),select=$("#historyJobs"),current=select.value;select.replaceChildren(new Option("选择已保存的结果",""),...list.map(j=>new Option(`${j.created_at.slice(0,16)} · ${j.options.inputMode==="sheet"?"四宫格":"原画"} · ${j.status}`,j.id)));select.value=current}
+    $("#historyJobs").onchange=()=>{const id=$("#historyJobs").value;if(!id)return;resetResults();history.replaceState(null,"",`#job=${id}`);poll(id).catch(showError)};
+    $("#inputMode").onchange=()=>{const sheet=$("#inputMode").value==="sheet";$("#layoutFields").hidden=!sheet;$("#removal").disabled=sheet;$("#imageSize").disabled=sheet;start.textContent=sheet?"导入并检查视图":"生成四视图";$("#dropText").textContent=file?.name||(sheet?"点击或拖入规则四宫格图片":"点击或拖入原画图片")};
+    $("#inputMode").onchange();refreshHistory().catch(showError);
+
+    function resize() {
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      if (canvas.width !== Math.round(width * devicePixelRatio) || canvas.height !== Math.round(height * devicePixelRatio)) {
+        renderer.setSize(width, height, false);
+        perspectiveCamera.aspect = width / height;
+        perspectiveCamera.updateProjectionMatrix();
+        fitOrthographic();
+      }
+    }
+    renderer.setAnimationLoop(() => {
+      resize();
+      controls.update();
+      renderer.render(scene, camera);
+    });
+
+    fetch("api/health").then((response) => response.json()).then((health) => {
+      const region = $("#region");
+      for (const option of region.options) {
+        const spec = health.regions?.[option.value];
+        if (spec && !spec.configured) {
+          option.disabled = true;
+          option.textContent += "（未配置）";
+        }
+      }
+      if (region.selectedOptions[0]?.disabled) {
+        const available = [...region.options].find((option) => !option.disabled);
+        if (available) region.value = available.value;
+      }
+      if (!health.configured) $("#error").textContent = "未配置生成服务：可拆分四宫格、预览本地模型和示例；提交生成需先配置API Key。";
+    }).catch(() => {});
+    const resume = location.hash.match(/^#job=([\w-]+)/);
+    if (resume) poll(resume[1]).catch(showError);
+    else poll("example-male2").catch(showError);
+  </script>
+</body>
+</html>

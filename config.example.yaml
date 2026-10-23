@@ -1,0 +1,10 @@
+# Copy outside the image as config.local.yaml; blank keys allow offline preview.
+regions:
+  cn:
+    label: 国内
+    base_url: ""
+    api_key: ""
+  overseas:
+    label: 海外
+    base_url: ""
+    api_key: ""

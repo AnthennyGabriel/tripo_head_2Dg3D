@@ -1,0 +1,27 @@
+services:
+  head:
+    build: .
+    image: vast-head-fallback:local
+    ports:
+      - "127.0.0.1:${HEAD_PORT:-8771}:8771"
+    environment:
+      TRIPO_HEAD_HOST: 0.0.0.0
+      TRIPO_HEAD_PORT: "8771"
+      TRIPO_HEAD_JOBS: /data/jobs
+      TRIPO_HEAD_CONFIG: /run/config/settings.yaml
+    volumes:
+      - head-jobs:/data/jobs
+      - type: bind
+        source: ${HEAD_CONFIG:-./config.example.yaml}
+        target: /run/config/settings.yaml
+        read_only: true
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8771/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+volumes:
+  head-jobs:

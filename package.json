@@ -1,0 +1,24 @@
+{
+  "name": "tripo-head",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Standalone four-view head generation, resumable jobs and local HDR IBL preview.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "check:secrets": "node scripts/check_secrets.mjs",
+    "pack:delivery": "node scripts/package_delivery.mjs"
+  },
+  "dependencies": {
+    "@vastai/tripo-sdk": "0.3.0",
+    "fflate": "0.8.3",
+    "js-yaml": "^4.3.2",
+    "sharp": "0.35.5",
+    "three": "0.160.1"
+  }
+}

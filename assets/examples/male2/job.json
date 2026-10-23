@@ -1,0 +1,42 @@
+{
+  "id": "example-male2",
+  "status": "done",
+  "stage": "done",
+  "progress": 100,
+  "options": {
+    "inputMode": "concept",
+    "region": "cn",
+    "removal": "keep",
+    "imageSize": "2K",
+    "swapSides": false,
+    "modelVersion": "h3.1",
+    "texture": true,
+    "textureQuality": "detailed",
+    "faceLimit": 100000,
+    "views": [
+      "front",
+      "left",
+      "back",
+      "right"
+    ]
+  },
+  "files": {
+    "reference": "reference.png",
+    "face_sheet": "face_sheet.png",
+    "view_front": "view_front.png",
+    "view_left": "view_left.png",
+    "view_back": "view_back.png",
+    "view_right": "view_right.png",
+    "model": "head.glb"
+  },
+  "tasks": {},
+  "source_sha256": "43b33e9dac35a617e96171e3aa2e516c051a431df52d03735e5c2df1f3779f6d",
+  "created_at": "2026-10-23T05:04:21.897Z",
+  "updated_at": "2026-10-23T05:09:21.382Z",
+  "error": null,
+  "submission_pending": null,
+  "credits": 75,
+  "last_run_seconds": 299.4716712,
+  "example": true,
+  "receipt_note": "Delivery example: internal provider task identifiers removed; actual generation settings and total credits retained."
+}

@@ -1,0 +1,26 @@
+# Credentials stay on the deployment machine.
+.env
+.env.*
+!.env.example
+config.yaml
+config.*.yaml
+!config.example.yaml
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime data, dependencies and local deliverables.
+node_modules/
+jobs/
+data/
+output/
+coverage/
+*.log
+*.zip
+*.tar
+*.tar.gz
+playwright-report/
+test-results/
+.DS_Store
+Thumbs.db
