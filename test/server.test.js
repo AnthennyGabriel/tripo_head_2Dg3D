@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdtemp,rm,readFile,writeFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,readFile,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
@@ -49,5 +49,19 @@ test('offline sheet preparation, history restoration, validation and local asset
   const summary=await(await fetch(base+'/api/benchmark')).json();assert.equal(summary.summary.reviewed,0);assert.equal(summary.summary.usable_rate,null);
   const changed=[{...cases[0],sha256:'a'.repeat(64)}];
   assert.equal((await fetch(base+'/api/benchmark/cases',{method:'POST',body:JSON.stringify(changed)})).status,409);
+ }finally{if(child)await stop(child);await rm(dir,{recursive:true,force:true});}
+});
+
+test('edited versions persist separately from the original and approval is explicit',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'head-versions-'));let child;
+ try{
+  const folder=path.join(dir,'fixture');await mkdir(folder);const bytes=await readFile(new URL('../assets/examples/male2/head.glb',import.meta.url));
+  await writeFile(path.join(folder,'head.glb'),bytes);await writeFile(path.join(folder,'job.json'),JSON.stringify({id:'fixture',status:'done',created_at:new Date().toISOString(),options:{},files:{model:'head.glb'}}));child=await start(dir);
+  const endpoint=base+'/api/jobs/fixture/versions';
+  assert.equal((await fetch(endpoint,{method:'POST',headers:{'Content-Type':'model/gltf-binary'},body:Buffer.from('invalid')})).status,400);
+  const r=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'model/gltf-binary'},body:bytes});assert.equal(r.status,201);const v=await r.json();assert.equal(v.status,'draft');
+  const update=await fetch(endpoint+'/'+v.id,{method:'POST',body:JSON.stringify({status:'approved',notes:'Fixture-only acceptance',settings:{operations:[]}})});assert.equal(update.status,200);
+  await stop(child);child=await start(dir);const saved=await(await fetch(base+'/api/jobs/fixture')).json();assert.equal(saved.files.model,'head.glb');assert.equal(saved.versions[0].status,'approved');assert.deepEqual(await readFile(path.join(folder,'head.glb')),bytes);
+  assert.equal((await fetch(base+'/api/jobs/fixture/files/'+v.file)).status,200);
  }finally{if(child)await stop(child);await rm(dir,{recursive:true,force:true});}
 });

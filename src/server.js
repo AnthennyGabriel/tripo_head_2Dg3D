@@ -11,7 +11,7 @@ import { zipSync } from 'fflate';
 import { MODEL_VERSIONS, IMAGE_SIZES, TEXTURE_QUALITIES, runPipeline } from './pipeline.js';
 import { generationPlan, TRIPO_VIEW_ORDER } from './sheet.js';
 import { REMOVAL_MODES, PROMPT_PROFILES } from './prompts.js';
-import { checkSelectedViews } from './quality.js';
+import { checkSelectedViews, inspectGlb } from './quality.js';
 import { validateReview, benchmarkSummary } from './benchmark.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -46,7 +46,7 @@ const cleanError=e=>{
   return msg.slice(0,1500);
 };
 function send(res,status,data){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));}
-async function body(req){let n=0;const chunks=[];for await(const c of req){n+=c.length;if(n>MAX)throw Object.assign(new Error('上传不能超过20MB'),{status:413});chunks.push(c);}return Buffer.concat(chunks);}
+async function body(req,limit=MAX){let n=0;const chunks=[];for await(const c of req){n+=c.length;if(n>limit)throw Object.assign(new Error(`上传不能超过${limit/1024/1024}MB`),{status:413});chunks.push(c);}return Buffer.concat(chunks);}
 function resolveFile(root,name){const f=path.resolve(root,name);if(!f.startsWith(path.resolve(root)+path.sep))throw Object.assign(new Error('文件不存在'),{status:404});return f;}
 async function file(res,f){const s=await stat(f);if(!s.isFile())throw Object.assign(new Error('文件不存在'),{status:404});res.writeHead(200,{'Content-Type':mime[path.extname(f).toLowerCase()]??'application/octet-stream','Content-Length':s.size,'X-Content-Type-Options':'nosniff'});createReadStream(f).pipe(res);}
 async function persist(job,patch={}){
@@ -159,6 +159,20 @@ async function handle(req,res){
  if(parts[0]==='api'&&parts[1]==='jobs'&&parts[2]){
   const job=jobs.get(parts[2]);if(!job)return send(res,404,{error:'任务不存在'});
   if(req.method==='GET'&&parts.length===3)return send(res,200,job);
+  if(req.method==='POST'&&parts[3]==='versions'&&parts.length===4){
+   if(job.status!=='done'||!job.files.model)return send(res,409,{error:'原模型尚未完成'});
+   if((job.versions?.length??0)>=30)return send(res,409,{error:'此任务已保存30个版本，请下载归档后另建任务'});
+   if(req.headers['content-type']!=='model/gltf-binary')return send(res,415,{error:'需要GLB文件'});
+   const bytes=await body(req,80*1024*1024);let stats;try{stats=inspectGlb(bytes);}catch{return send(res,400,{error:'修改版GLB无效'});}
+   const id=randomUUID(),name=`edit-${id}.glb`,record={id,file:name,sha256:createHash('sha256').update(bytes).digest('hex'),created_at:new Date().toISOString(),status:'draft',notes:'',stats};
+   await writeFile(path.join(JOBS,job.id,name),bytes);await persist(job,{versions:[...(job.versions??[]),record],files:{...job.files,[`edit_${id}`]:name}});return send(res,201,record);
+  }
+  if(req.method==='POST'&&parts[3]==='versions'&&parts.length===5){
+   const v=job.versions?.find(v=>v.id===parts[4]);if(!v)return send(res,404,{error:'版本不存在'});
+   let data;try{data=JSON.parse((await body(req)).toString());if(!['draft','approved'].includes(data.status)||typeof data.notes!=='string'||data.notes.length>3000||JSON.stringify(data.settings??{}).length>1000000)throw Error();}catch{return send(res,400,{error:'版本备注或设置无效'});}
+   const next={...v,status:data.status,notes:data.notes,settings:data.settings??{},updated_at:new Date().toISOString(),approved_at:data.status==='approved'?new Date().toISOString():null};
+   const name=`edit-${v.id}.json`;await writeFile(path.join(JOBS,job.id,name),JSON.stringify(next,null,2));await persist(job,{versions:job.versions.map(x=>x.id===v.id?next:x),files:{...job.files,[`edit_meta_${v.id}`]:name}});return send(res,200,next);
+  }
   if(req.method==='POST'&&parts[3]==='review'&&parts.length===4){
    let review;try{review=validateReview(JSON.parse((await body(req)).toString()));}catch(e){return send(res,400,{error:cleanError(e)});}
    const field=review.reviewer_type==='agent'?'agent_review':'review';

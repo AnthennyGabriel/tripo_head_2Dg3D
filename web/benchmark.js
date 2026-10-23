@@ -17,6 +17,7 @@ function render(){
  }).join(''):'<p>尚无回归样本。使用 scripts/benchmark.mjs 注册并启动固定样本试验。</p>';
  document.querySelectorAll('form.review').forEach(form=>{
  const j=report.jobs.find(j=>j.id===form.dataset.id);
+ if(j.status==='done')form.insertAdjacentHTML('beforebegin',`<p><a href="/workbench.html?job=${encodeURIComponent(j.id)}">进入对照验收与局部几何微调 →</a></p>`);
  if(j.files.preview_front&&j.files.preview_clay)form.insertAdjacentHTML('beforebegin',`<details><summary>已保存的正面材质 / 白模截图</summary><p class="muted">同一次浏览器检查保存；完整模型请点击上方 3D 链接旋转检查。</p><div class="pair">${['preview_front','preview_clay'].map(k=>`<a href="${file(j,k)}" target="_blank"><img loading="lazy" src="${file(j,k)}" alt="${k==='preview_front'?'材质截图':'白模截图'}"></a>`).join('')}</div></details>`);
  if(j.posthoc_quality)form.insertAdjacentHTML('beforebegin',`<details><summary>新增规则事后复查（不等于生成前拦截）</summary><pre>${esc(JSON.stringify(j.posthoc_quality,null,2))}</pre></details>`);
  form.onsubmit=async e=>{

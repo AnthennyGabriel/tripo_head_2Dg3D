@@ -542,6 +542,7 @@
         const credits = job.credits ? ` · 消耗 ${job.credits} 积分` : "";
         const faces = job.options.faceLimit ? `面数上限 ${job.options.faceLimit}` : "面数不限";
         $("#modelInfo").innerHTML = `${faces}${credits} · <a class="download" href="${fileUrl(job, job.files.model)}" download>下载模型</a>`;
+        const editLink=document.createElement('a');editLink.href=`/workbench.html?job=${encodeURIComponent(job.id)}`;editLink.textContent=' · 对照验收 / 局部微调';$('#modelInfo').append(editLink);
         const links=document.createElement("div");
         for(const [label,url] of [["下载原图与模型完整产物包",`api/jobs/${job.id}/archive`],["任务参数记录",`api/jobs/${job.id}/receipt`]]){const a=document.createElement("a");a.href=url;a.textContent=label;a.style.marginRight="16px";a.setAttribute("download","");links.append(a)}$("#modelInfo").append(links);
         if (shownModel !== job.id && job.files.model.endsWith(".glb")) {
