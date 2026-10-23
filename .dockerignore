@@ -10,6 +10,7 @@ data
 output
 playwright*
 .git
+.playwright-cli
 .github
 .env.*
 config.*.yaml

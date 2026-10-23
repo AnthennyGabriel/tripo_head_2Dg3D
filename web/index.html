@@ -132,6 +132,8 @@
       <div id="layoutFields"><label class="field">四宫格图块（左上、右上、左下、右下）</label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px"><select id="layout0"><option value="front" selected>正面</option><option value="back">背面</option><option value="left">左侧</option><option value="right">右侧</option></select><select id="layout1"><option value="front">正面</option><option value="back" selected>背面</option><option value="left">左侧</option><option value="right">右侧</option></select><select id="layout2"><option value="front">正面</option><option value="back">背面</option><option value="left" selected>左侧</option><option value="right">右侧</option></select><select id="layout3"><option value="front">正面</option><option value="back">背面</option><option value="left">左侧</option><option value="right" selected>右侧</option></select></div></div>
       <label class="field">历史任务<select id="historyJobs"><option value="">选择已保存的结果</option></select></label>
+      <p><a href="/benchmark.html">五样本质量回归与人工验收 →</a></p>
+      <label class="field">四视图生成策略<select id="promptProfile"><option value="baseline">原始提示词（默认）</option><option value="identity-v1">人物特征约束 v1（实验，需核对侧面）</option></select></label>
       <button type="button" id="loadExample">查看本轮真实生成示例（不调用API）</button>
       <button type="button" id="openLocal">导入本地GLB</button><input id="localGlb" type="file" accept=".glb">
       <label class="field">模型面数
@@ -208,6 +210,8 @@
         <div class="choose-bar">
           <button type="button" class="primary" id="useViews">用选中的图生成模型</button>
           <p id="chooseHint"></p>
+          <p id="qualityWarnings" style="color:#eac17a;white-space:pre-line"></p>
+          <label class="check"><input type="checkbox" id="qualityAck"> 已对照原图检查人物、方向和比例；接受上述提醒后继续</label>
           <p>点左边的图切换选中。一张走单图；两张及以上走多视图，必须含正面。左右反了先勾选「左右侧视图对调」。</p>
           <p>模型面数、模型版本和贴图设置以点这个按钮时侧边栏的值为准。</p>
         </div>
@@ -412,6 +416,9 @@
       const button = old.cloneNode(true);
       old.replaceWith(button);
       const hint = $("#chooseHint");
+      const warningNames={blank_or_flat:'图块疑似空白或纯色，请取消选择',near_panel_edge:'人物靠近边缘，检查是否被裁断',subject_too_small:'主体偏小',background_needs_manual_check:'非白背景，轮廓检查不可靠',inconsistent_subject_scale:'各视图主体高度差异较大，检查尺度一致性',possibly_duplicate_profiles:'两张侧面疑似重复或同向，请核对后取消错误视图'};
+      $('#qualityWarnings').textContent=(job.quality?.warnings??[]).map(w=>`${VIEW_NAMES[w.view]??'全部视图'}：${warningNames[w.code]??w.code}`).join('\n')||'自动检查未发现明显空白或尺度风险；仍需人工核对人物和视角。';
+      $('#qualityAck').checked=false;
       function refresh() {
         for (const figure of document.querySelectorAll("#views figure")) {
           const on = selected.has(figure.dataset.view);
@@ -432,7 +439,9 @@
           button.disabled = false;
           hint.textContent = `将用这 ${selected.size} 张（${names.join("、")}）做多视图生成。`;
         }
+        if((job.quality?.warnings?.length&&!$('#qualityAck').checked)||[...selected].some(v=>job.quality?.views?.[v]?.warnings.includes('blank_or_flat')))button.disabled=true;
       }
+      $('#qualityAck').onchange=refresh;
       for (const figure of document.querySelectorAll("#views figure")) {
         figure.addEventListener("click", () => {
           const view = figure.dataset.view;
@@ -450,6 +459,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               views: VIEW_ORDER.filter((view) => selected.has(view)),
+              quality_ack: $('#qualityAck').checked,
               swap_sides: $("#swapSides").checked,
               model: $("#modelVersion").value,
               texture: $("#texture").checked,
@@ -501,6 +511,7 @@
         settingsJob=job.id;
         for(const [id,value] of Object.entries({inputMode:job.options.inputMode??'concept',region:job.options.region,modelVersion:job.options.modelVersion,textureQuality:job.options.textureQuality,faceLimit:job.options.faceLimit??'',removal:job.options.removal,imageSize:job.options.imageSize})){if(value!=null)$('#'+id).value=value;}
         $('#texture').checked=job.options.texture;$('#swapSides').checked=!!job.options.swapSides;
+        if(!job.example)$('#promptProfile').value=job.options.promptProfile??'baseline';
         (job.options.layout??['front','back','left','right']).forEach((v,i)=>$('#layout'+i).value=v);
         $('#inputMode').onchange();
       }
@@ -553,6 +564,7 @@
       resetResults();
       const params = new URLSearchParams({
         input_mode: $("#inputMode").value,
+        prompt_profile: $('#promptProfile').value,
         layout: [0,1,2,3].map(i=>$("#layout"+i).value).join(","),
         model: $("#modelVersion").value,
         removal: $("#removal").value,
@@ -740,7 +752,9 @@
       ].filter(Boolean).join("\n");
     }
 
-    function clearModel() {
+    let modelLoadGeneration=0;
+    function clearModel(invalidate=true) {
+      if(invalidate){modelLoadGeneration++;window.viewerReady=false;}
       if (model) {
         scene.remove(model);const disposed=new Set();
         model.traverse(o=>{if(o.isMesh){o.geometry?.dispose();}});
@@ -748,14 +762,16 @@
       }
       model = null;
       parts = [];
-      shownModel = null;
+      if(invalidate)shownModel = null;
       $("#stats").textContent = "";
     }
 
     function loadModel(url) {
+      const generation=++modelLoadGeneration;
       window.viewerReady=false;
       new GLTFLoader().load(url, (gltf) => {
-        clearModel();
+        if(generation!==modelLoadGeneration){gltf.scene.traverse(o=>{if(o.isMesh){o.geometry?.dispose();for(const m of Array.isArray(o.material)?o.material:[o.material]){for(const v of Object.values(m??{}))if(v?.isTexture)v.dispose();m?.dispose();}}});return;}
+        clearModel(false);
         model = gltf.scene;
         const box = new THREE.Box3().setFromObject(model);
         modelSize = box.getSize(new THREE.Vector3()).length();
@@ -790,7 +806,7 @@
         applyLook();
         showStats();window.viewerReady=true;window.previewVertexCount=parts.reduce((sum,p)=>sum+p.mesh.geometry.attributes.position.count,0);
         document.querySelector('.viewer-card').scrollIntoView({block:'start',behavior:'smooth'});
-      }, undefined, (error) => showError(new Error(`模型加载失败：${error.message || error}`)));
+      }, undefined, (error) => {if(generation===modelLoadGeneration)showError(new Error(`模型加载失败：${error.message || error}`));});
     }
 
     for (const input of document.querySelectorAll("#tools input, #tools select")) {
@@ -851,6 +867,7 @@
       if (!health.configured) $("#error").textContent = "未配置生成服务：可拆分四宫格、预览本地模型和示例；提交生成需先配置API Key。";
     }).catch(() => {});
     const resume = location.hash.match(/^#job=([\w-]+)/);
+    window.addEventListener('hashchange',()=>{const next=location.hash.match(/^#job=([\w-]+)/);if(next){clearTimeout(pollTimer);resetResults();settingsJob=null;poll(next[1]).catch(showError);}});
     if (resume) poll(resume[1]).catch(showError);
     else poll("example-male2").catch(showError);
   </script>

@@ -4,16 +4,15 @@ import { SHEET_LAYOUT } from './prompts.js';
 
 // Tripo multiview-to-model expects views in this order.
 export const TRIPO_VIEW_ORDER = Object.freeze(['front', 'left', 'back', 'right']);
-// The image model often draws dividing lines between panels despite the
-// prompt; this fraction of each panel edge is painted white so they do not
-// reach Tripo as part of the head.
+// Add the SAME margin to every view. Never erase an edge strip: a tightly
+// framed scalp, hair or ear may occupy it. Divider lines require review.
 const EDGE_MARGIN = 0.015;
 
 /**
  * Splits a 2x2 sheet into equal quadrants keyed by view name.
  *
  * Quadrants are not trimmed individually: multiview reconstruction needs
- * every view at the same scale, which the sheet already guarantees.
+ * preserve the original scale. Equal panels alone do not guarantee equal head size.
  *
  * @param {Buffer} sheet encoded image
  * @returns {Promise<Record<string, Buffer>>} PNG per view
@@ -22,7 +21,7 @@ export async function splitSheet(sheet, { layout = ['front','back','left','right
   if (!Array.isArray(layout) || layout.length !== 4 || new Set(layout).size !== 4 || layout.some(v => !TRIPO_VIEW_ORDER.includes(v))) {
     throw new RangeError('四个图块需要分别指定正面、背面、左侧、右侧，不能重复。');
   }
-  const image = sharp(sheet, { limitInputPixels: 40_000_000 }).removeAlpha();
+  const image = sharp(sheet, { limitInputPixels: 40_000_000 }).flatten({background:'#ffffff'});
   const { width, height } = await image.metadata();
   if (!width || !height || width < 64 || height < 64) {
     throw new Error(`Sheet is too small to split (${width}x${height}).`);
@@ -37,10 +36,10 @@ export async function splitSheet(sheet, { layout = ['front','back','left','right
     const inner = await image
         .clone()
         .extract({
-          left: left + margin,
-          top: top + margin,
-          width: halfWidth - 2 * margin,
-          height: halfHeight - 2 * margin,
+          left,
+          top,
+          width: halfWidth,
+          height: halfHeight,
         })
         .toBuffer();
     views[view] = await sharp(inner)

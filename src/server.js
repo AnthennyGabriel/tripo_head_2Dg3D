@@ -10,7 +10,9 @@ import sharp from 'sharp';
 import { zipSync } from 'fflate';
 import { MODEL_VERSIONS, IMAGE_SIZES, TEXTURE_QUALITIES, runPipeline } from './pipeline.js';
 import { generationPlan, TRIPO_VIEW_ORDER } from './sheet.js';
-import { REMOVAL_MODES } from './prompts.js';
+import { REMOVAL_MODES, PROMPT_PROFILES } from './prompts.js';
+import { checkSelectedViews } from './quality.js';
+import { validateReview, benchmarkSummary } from './benchmark.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const HOST = process.env.TRIPO_HEAD_HOST ?? '127.0.0.1';
@@ -29,6 +31,10 @@ const regions = Object.fromEntries(['cn','overseas'].map(id => {
     client:valid ? new TripoClient({ apiKey:key, retries:0, ...(base?{baseUrl:base}:{}) }) : null }];
 }));
 const jobs=new Map(), active=new Map(), waiters=new Map(), writes=new Map();
+let creationTail=Promise.resolve();
+async function serializedCreate(req,res,q){const previous=creationTail;let release;creationTail=new Promise(r=>release=r);await previous;try{await create(req,res,q);}finally{release();}}
+let benchmarkCases=[];
+try{benchmarkCases=JSON.parse(await readFile(path.join(JOBS,'benchmark-cases.json'),'utf8'));}catch{}
 const MAX=20*1024*1024;
 const idValid=id=>/^[a-zA-Z0-9_-]{1,80}$/.test(id);
 const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json',
@@ -60,8 +66,9 @@ function modelOptions(data={}){
 }
 function options(q){
  const o={inputMode:q.get('input_mode')??'concept',region:q.get('region')??'cn',removal:q.get('removal')??'keep',imageSize:q.get('image_size')??'2K',swapSides:q.get('swap_sides')==='1',
+  promptProfile:q.get('prompt_profile')??'baseline',
   ...modelOptions({model:q.get('model')??undefined,texture:q.get('texture')!=='0',texture_quality:q.get('texture_quality')??undefined,face_limit:q.get('face_limit')})};
- if(!['concept','sheet'].includes(o.inputMode)||!Object.hasOwn(regions,o.region)||!REMOVAL_MODES.includes(o.removal)||!IMAGE_SIZES.includes(o.imageSize))throw new Error('输入选项无效');
+ if(!['concept','sheet'].includes(o.inputMode)||!Object.hasOwn(regions,o.region)||!REMOVAL_MODES.includes(o.removal)||!IMAGE_SIZES.includes(o.imageSize)||!PROMPT_PROFILES.includes(o.promptProfile))throw new Error('输入选项无效');
  if(q.has('layout')){o.layout=q.get('layout').split(',');if(o.layout.length!==4||new Set(o.layout).size!==4||o.layout.some(v=>!TRIPO_VIEW_ORDER.includes(v)))throw new Error('四宫格视角不能重复或缺失');}
  return o;
 }
@@ -83,11 +90,22 @@ async function create(req,res,q){
  if(o.inputMode==='concept'&&!regions[o.region].client)return send(res,503,{error:'未配置生成服务。可直接导入已有四宫格或预览本地GLB。'});
  if(!['image/png','image/jpeg','image/webp'].includes((req.headers['content-type']??'').split(';')[0]))return send(res,415,{error:'只支持PNG/JPEG/WebP'});
  const bytes=await body(req);let png;
+ const sourceHash=createHash('sha256').update(bytes).digest('hex');
+ let benchmark;
+ if(q.has('case_id')){
+  const caseId=q.get('case_id'),group=q.get('group'),repeat=Number(q.get('repeat'));
+  const c=benchmarkCases.find(c=>c.id===caseId);
+  if(!c||c.sha256!==sourceHash||!idValid(group??'')||!Number.isInteger(repeat)||repeat<1||repeat>10)return send(res,400,{error:'样本、源图哈希或重复编号无效'});
+  const goal=q.get('goal')??'model';if(!['model','sheet'].includes(goal))return send(res,400,{error:'试验目标无效'});
+  benchmark={case_id:caseId,group,repeat,label:c.label,tags:c.tags,goal};
+  const existing=[...jobs.values()].find(j=>j.benchmark?.case_id===caseId&&j.benchmark.group===group&&j.benchmark.repeat===repeat);
+  if(existing){if(JSON.stringify(existing.initial_options??existing.options)!==JSON.stringify(o)||(existing.benchmark.goal??'model')!==goal)return send(res,409,{error:'同一试验编号已有不同配置，请使用新的组名'});return send(res,200,{id:existing.id,reused:true});}
+ }
  try{const image=sharp(bytes,{limitInputPixels:40_000_000});const meta=await image.metadata();if(!['png','jpeg','webp'].includes(meta.format)||meta.width<64||meta.height<64)throw new Error();png=await image.rotate().png().toBuffer();}
  catch{return send(res,400,{error:'图片无效、过小或超过4000万像素'});}
  const id=randomUUID(),dir=path.join(JOBS,id);await mkdir(dir,{recursive:true});await writeFile(path.join(dir,'reference.png'),png);
- const job={id,status:'running',stage:'upload',progress:0,options:o,files:{reference:'reference.png'},tasks:{},
-  source_sha256:createHash('sha256').update(bytes).digest('hex'),created_at:new Date().toISOString()};
+ const job={id,status:'running',stage:'upload',progress:0,options:o,initial_options:structuredClone(o),files:{reference:'reference.png'},tasks:{},
+  source_sha256:sourceHash,...(benchmark?{benchmark}:{}),created_at:new Date().toISOString()};
  jobs.set(id,job);await persist(job);launch(job);send(res,202,{id});
 }
 async function continueJob(req,res,job){
@@ -96,8 +114,10 @@ async function continueJob(req,res,job){
   o=modelOptions({model:d.model??job.options.modelVersion,texture:d.texture??job.options.texture,texture_quality:d.texture_quality??job.options.textureQuality,face_limit:d.face_limit??job.options.faceLimit});
  }catch(e){return send(res,400,{error:cleanError(e)});}
  if(!regions[job.options.region]?.client)return send(res,503,{error:'未配置该生成服务的API Key，视图已保存。'});
+ try{checkSelectedViews(job.quality,d.views);}catch(e){return send(res,422,{error:cleanError(e)});}
+ if(job.quality?.warnings?.length&&!d.quality_ack)return send(res,422,{error:'存在四视图检查提醒，请核对后确认继续。'});
  Object.assign(job.options,o,{views:d.views,swapSides:typeof d.swap_sides==='boolean'?d.swap_sides:job.options.swapSides});
- await persist(job,{status:'running',stage:'model'});
+ await persist(job,{status:'running',stage:'model',sheet_review:{acknowledged:true,reviewer_type:d.reviewer_type==='agent'?'agent':'human',notes:String(d.sheet_notes??'').slice(0,2000),at:new Date().toISOString()}});
  const resume=waiters.get(job.id);waiters.delete(job.id);
  if(resume)resume(d.views);else launch(job);
  send(res,202,{id:job.id});
@@ -126,10 +146,24 @@ async function handle(req,res){
  }
  if(req.method==='GET'&&url.pathname==='/api/health')return send(res,200,{ok:true,configured:Object.values(regions).some(r=>r.client),regions:Object.fromEntries(Object.entries(regions).map(([id,r])=>[id,{label:r.label,configured:!!r.client}]))});
  if(req.method==='GET'&&url.pathname==='/api/jobs')return send(res,200,[...jobs.values()].sort((a,b)=>b.created_at.localeCompare(a.created_at)));
- if(req.method==='POST'&&url.pathname==='/api/jobs')return create(req,res,url.searchParams);
+ if(req.method==='GET'&&url.pathname==='/api/benchmark'){
+  const trials=[...jobs.values()].filter(j=>j.benchmark);
+  return send(res,200,{cases:benchmarkCases,jobs:trials,summary:benchmarkSummary(trials),groups:Object.fromEntries([...new Set(trials.map(j=>j.benchmark.group))].map(g=>[g,benchmarkSummary(trials.filter(j=>j.benchmark.group===g))]))});
+ }
+ if(req.method==='POST'&&url.pathname==='/api/benchmark/cases'){
+  let data;try{data=JSON.parse((await body(req)).toString());if(!Array.isArray(data)||data.length>100||new Set(data.map(c=>c.id)).size!==data.length||data.some(c=>!idValid(c.id??'')||!/^[a-f0-9]{64}$/.test(c.sha256??'')||typeof c.label!=='string'||!Array.isArray(c.tags)||c.tags.some(t=>typeof t!=='string'||t.length>100)))throw Error();}catch{return send(res,400,{error:'回归样本清单无效'});}
+  if(benchmarkCases.some(c=>[...jobs.values()].some(j=>j.benchmark?.case_id===c.id)&&!data.some(n=>n.id===c.id&&n.sha256===c.sha256)))return send(res,409,{error:'已运行样本不可替换源图；请创建新样本编号'});
+  benchmarkCases=data.map(c=>({id:c.id,label:c.label.slice(0,80),sha256:c.sha256,tags:c.tags}));await writeFile(path.join(JOBS,'benchmark-cases.json'),JSON.stringify(benchmarkCases,null,2));return send(res,200,{count:benchmarkCases.length});
+ }
+ if(req.method==='POST'&&url.pathname==='/api/jobs')return serializedCreate(req,res,url.searchParams);
  if(parts[0]==='api'&&parts[1]==='jobs'&&parts[2]){
   const job=jobs.get(parts[2]);if(!job)return send(res,404,{error:'任务不存在'});
   if(req.method==='GET'&&parts.length===3)return send(res,200,job);
+  if(req.method==='POST'&&parts[3]==='review'&&parts.length===4){
+   let review;try{review=validateReview(JSON.parse((await body(req)).toString()));}catch(e){return send(res,400,{error:cleanError(e)});}
+   const field=review.reviewer_type==='agent'?'agent_review':'review';
+   await persist(job,{[field]:review});return send(res,200,{id:job.id,[field]:review});
+  }
   if(req.method==='POST'&&parts[3]==='continue'&&parts.length===4)return continueJob(req,res,job);
   if(req.method==='POST'&&parts[3]==='resume'&&parts.length===4){
    if(!['interrupted','failed'].includes(job.status)||(!job.tasks?.model&&!job.tasks?.face_sheet)||job.submission_pending)return send(res,409,{error:'没有可安全恢复的外部任务ID，未重复提交'});

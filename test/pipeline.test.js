@@ -9,7 +9,8 @@ import {runPipeline} from '../src/pipeline.js';
 const defaults={inputMode:'sheet',modelVersion:'h3.1',texture:true,textureQuality:'detailed',layout:['front','back','left','right'],swapSides:false};
 async function fixture(){
  const dir=await mkdtemp(path.join(tmpdir(),'head-pipeline-'));
- const data=await sharp({create:{width:256,height:256,channels:3,background:'#bbaaaa'}}).png().toBuffer();
+ const tile=await sharp({create:{width:128,height:128,channels:3,background:'#fff'}}).composite([{input:Buffer.from('<svg width="128" height="128"><ellipse cx="64" cy="64" rx="35" ry="50" fill="#bbaaaa"/></svg>')}]).png().toBuffer();
+ const data=await sharp({create:{width:256,height:256,channels:3,background:'#fff'}}).composite([0,1,2,3].map(i=>({input:tile,left:(i%2)*128,top:Math.floor(i/2)*128}))).png().toBuffer();
  const state={files:{},tasks:{}},calls=[];
  const update=async p=>{Object.assign(state,structuredClone(p));calls.push({op:'persist',tasks:structuredClone(state.tasks),pending:state.submission_pending});};
  const client={uploadFile:async()=>{calls.push({op:'upload'});return {file_token:'fixture-token'};},
@@ -42,5 +43,16 @@ test('ambiguous submission is not automatically charged again',async()=>{
  const f=await fixture();try{
   await assert.rejects(runPipeline({...f,reference:{data:f.data},options:{...defaults},state:{submission_pending:'model',tasks:{}},chooseViews:async()=>['front']}),/提交结果未知/);
   assert.equal(f.calls.length,0);
+ }finally{await rm(f.dir,{recursive:true,force:true});}
+});
+
+test('unknown service billing remains unknown and provenance accompanies the model',async()=>{
+ const f=await fixture();try{
+  f.client.waitForTask=async id=>({task_id:id});
+  await runPipeline({...f,reference:{data:f.data},options:{...defaults,promptProfile:'identity-v1'},chooseViews:async()=>['front','left']});
+  assert.equal(f.state.credits,null);assert.equal(f.state.billing_complete,false);
+  const provenance=JSON.parse(await readFile(path.join(f.dir,f.state.files.provenance),'utf8'));
+  assert.equal(provenance.prompt_profile,'identity-v1');assert.equal(provenance.reference_sha256.length,64);assert.deepEqual(provenance.selected_views,['front','left']);
+  assert.ok(f.state.model_quality.vertices>0);assert.ok(f.state.timings.model>=0);
  }finally{await rm(f.dir,{recursive:true,force:true});}
 });

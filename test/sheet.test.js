@@ -34,12 +34,14 @@ test('splits each view from the panel the prompt puts it in', async () => {
   const views = await splitSheet(await quadrantSheet(256));
   for (const [view, panel] of Object.entries(SHEET_LAYOUT)) {
     const { data, info } = await sharp(views[view]).raw().toBuffer({ resolveWithObject: true });
-    assert.equal(info.width, 128);
-    assert.equal(info.height, 128);
-    const center = (64 * 128 + 64) * info.channels;
+    assert.equal(info.width, 132);
+    assert.equal(info.height, 132);
+    const center = (66 * 132 + 66) * info.channels;
     assert.deepEqual([...data.subarray(center, center + 3)], Object.values(COLORS[panel]), view);
-    // Panel edges, where divider lines are drawn, come back white.
+    // Added margins are white; the original boundary is preserved.
     assert.deepEqual([...data.subarray(0, 3)], [255, 255, 255], view);
+    const boundary=(2*132+2)*info.channels;
+    assert.deepEqual([...data.subarray(boundary,boundary+3)],Object.values(COLORS[panel]));
   }
 });
 

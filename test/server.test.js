@@ -5,6 +5,7 @@ import {mkdtemp,rm,readFile,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
+import {createHash} from 'node:crypto';
 
 const root=new URL('../',import.meta.url),base='http://127.0.0.1:18771';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
@@ -35,5 +36,18 @@ test('offline sheet preparation, history restoration, validation and local asset
   assert.equal((await fetch(base+'/api/jobs?input_mode=sheet&layout=front,front,left,right',{method:'POST',headers:{'Content-Type':'image/png'},body:bytes})).status,400);
   assert.equal((await fetch(base+'/api/jobs?input_mode=sheet',{method:'POST',headers:{'Content-Type':'image/png'},body:Buffer.from('invalid')})).status,400);
   assert.equal((await fetch(base+'/api/jobs?input_mode=sheet',{method:'POST',headers:{Origin:'https://other.invalid'},body:bytes})).status,403);
+  const cases=[{id:'case1',label:'Case 1',tags:['test'],sha256:createHash('sha256').update(bytes).digest('hex')}];
+  assert.equal((await fetch(base+'/api/benchmark/cases',{method:'POST',body:JSON.stringify(cases)})).status,200);
+  const url=base+'/api/jobs?input_mode=sheet&case_id=case1&group=test&repeat=1';
+  const responses=await Promise.all([0,1].map(()=>fetch(url,{method:'POST',headers:{'Content-Type':'image/png'},body:bytes}).then(r=>r.json())));
+  assert.equal(responses[0].id,responses[1].id,'concurrent duplicate benchmark submission reuses one job');
+  assert.equal((await fetch(url+'&prompt_profile=identity-v1',{method:'POST',headers:{'Content-Type':'image/png'},body:bytes})).status,409);
+  assert.equal((await fetch(url+'&goal=sheet',{method:'POST',headers:{'Content-Type':'image/png'},body:bytes})).status,409);
+  const bid=responses[0].id;
+  assert.equal((await fetch(base+'/api/jobs/'+bid+'/review',{method:'POST',body:JSON.stringify({decision:'usable',reviewer_type:'agent'})})).status,200);
+  const record=await(await fetch(base+'/api/jobs/'+bid)).json();assert.ok(record.agent_review);assert.equal(record.review,undefined);
+  const summary=await(await fetch(base+'/api/benchmark')).json();assert.equal(summary.summary.reviewed,0);assert.equal(summary.summary.usable_rate,null);
+  const changed=[{...cases[0],sha256:'a'.repeat(64)}];
+  assert.equal((await fetch(base+'/api/benchmark/cases',{method:'POST',body:JSON.stringify(changed)})).status,409);
  }finally{if(child)await stop(child);await rm(dir,{recursive:true,force:true});}
 });

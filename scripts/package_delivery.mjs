@@ -5,7 +5,7 @@ import {zipSync} from 'fflate';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const out=process.argv[2]?path.resolve(process.argv[2]):path.join(root,'output');
 await mkdir(out,{recursive:true});
-const entries={},excluded=new Set(['node_modules','jobs','output','data','.env','config.yaml','config.local.yaml','.git']);
+const entries={},excluded=new Set(['node_modules','jobs','output','data','.env','config.yaml','config.local.yaml','.git','.playwright-cli']);
 async function walk(dir,relative=''){
  for(const e of await readdir(dir,{withFileTypes:true})){
   if(excluded.has(e.name)||e.name.endsWith('.log')||(e.name.startsWith('.env')&&e.name!=='.env.example')||(e.name.startsWith('config.')&&e.name.endsWith('.yaml')&&e.name!=='config.example.yaml')||/\.(pem|key|p12|pfx|zip|tar|gz)$/i.test(e.name))continue;
