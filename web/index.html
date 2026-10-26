@@ -22,7 +22,8 @@
     aside { position: relative; z-index: 2; background: var(--panel); border-right: 1px solid var(--line); padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; }
     .side-scroll { display: flex; flex-direction: column; gap: 12px; }
     .side-foot { position: sticky; bottom: 0; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; background: var(--panel); }
-    main { min-width: 0; overflow: auto; padding: 16px; display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: start; }
+    #jumpToModel { min-height: 34px; border: 1px solid var(--accent); border-radius: 8px; background: #242a35; color: var(--text); cursor: pointer; }
+    main { min-width: 0; min-height: 0; overflow: auto; padding: 16px; display: grid; gap: 14px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start; align-items: start; }
     h2 { margin: 0; font-size: 15px; }
     .hint { color: var(--muted); font-size: 12.5px; margin: 0; }
     label.field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
@@ -66,7 +67,7 @@
     #error { color: var(--bad); font-size: 13px; white-space: pre-wrap; }
     .card { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
     .card header { min-width: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
-    .card header span { color: var(--muted); flex: none; }
+    .card header span { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
     .card .body { min-width: 0; aspect-ratio: 1; display: grid; place-items: center; background: #fff; }
     .card .body img { width: 100%; height: 100%; min-width: 0; object-fit: contain; display: block; }
     .card .body.empty { background: #161a21; color: var(--muted); font-size: 13px; }
@@ -83,7 +84,8 @@
     .choose-bar #chooseHint { color: var(--text); font-size: 13px; }
     .card .body a { display: contents; }
     .card.viewer-card { grid-column: 1 / -1; }
-    .stage { position: relative; height: max(560px, calc(100vh - 110px)); }
+    /* Keep the complete canvas in the scrollable grid instead of clipping a flex-shrunk card. */
+    .stage { position: relative; flex: none; height: clamp(360px, calc(100dvh - 110px), 900px); }
     .stage:fullscreen { height: 100vh; }
     #viewer { width: 100%; height: 100%; display: block; }
     .tools {
@@ -93,6 +95,7 @@
       background: rgba(20, 23, 30, .88); backdrop-filter: blur(6px); font-size: 12.5px;
     }
     .tools.hidden > :not(.tools-head) { display: none; }
+    .tools.hidden { width: 140px; }
     .tools-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
     .tools label { display: grid; gap: 3px; color: var(--muted); }
     .tools label.check { display: flex; color: var(--text); }
@@ -112,6 +115,7 @@
       .app { grid-template-columns: 1fr; height: auto; }
       main { overflow:visible; }
       .card header { flex-wrap:wrap; }
+      .stage { height: clamp(360px, 65dvh, 560px); }
     }
   </style>
 </head>
@@ -179,6 +183,7 @@
       <label class="check"><input type="checkbox" id="swapSides"> 左右侧视图对调（模型侧面反了时勾选）</label>
       </div>
       <div class="side-foot">
+      <button type="button" id="jumpToModel">查看 3D 头模 ↓</button>
       <div class="drop" id="drop">
         <img id="refPreview" hidden alt="参考原画">
         <div id="dropText">点击或拖入规则四宫格图片</div>
@@ -601,6 +606,7 @@
 
     // Viewer.
     const stage = $("#stage");
+    $("#jumpToModel").onclick=()=>document.querySelector('.viewer-card').scrollIntoView({block:'start',behavior:'smooth'});
     const canvas = $("#viewer");
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -832,6 +838,12 @@
       const hidden = $("#tools").classList.toggle("hidden");
       $("#toggleTools").textContent = hidden ? "展开" : "收起";
     });
+    const narrowViewer = matchMedia('(max-width: 900px)');
+    function collapseNarrowTools() {
+      if (narrowViewer.matches) { $('#tools').classList.add('hidden'); $('#toggleTools').textContent = '展开'; }
+    }
+    narrowViewer.addEventListener('change', collapseNarrowTools);
+    collapseNarrowTools();
     resetLook();
     $("#screenshot").onclick=()=>{renderer.render(scene,camera);const a=document.createElement("a");a.download="head-preview.png";a.href=canvas.toDataURL("image/png");a.click()};
     $("#openLocal").onclick=()=>$("#localGlb").click();
